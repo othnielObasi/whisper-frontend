@@ -1,4 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { 
+  SignedIn, 
+  SignedOut, 
+  SignInButton, 
+  SignUpButton,
+  UserButton,
+  useUser 
+} from '@clerk/clerk-react';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -312,13 +320,16 @@ function StatusPanel({ jobId, onTranscriptReady, onStatusUpdate }) {
   if (!jobId) return null;
 
   const getStatusIcon = () => {
-    switch (statusDetails?.status) {
-      case 'queued': return '⏳';
-      case 'processing': return '⚙️';
-      case 'completed': return '✅';
-      case 'failed': return '❌';
-      default: return '📋';
-    }
+    const isSpinning = statusDetails?.status === 'processing' || statusDetails?.status === 'queued';
+    return (
+      <span className={isSpinning ? 'spinning' : ''}>
+        {statusDetails?.status === 'queued' && '⏳'}
+        {statusDetails?.status === 'processing' && '⚙️'}
+        {statusDetails?.status === 'completed' && '✅'}
+        {statusDetails?.status === 'failed' && '❌'}
+        {!statusDetails?.status && '📋'}
+      </span>
+    );
   };
 
   const formatElapsed = (seconds) => {
@@ -652,7 +663,7 @@ function TranscriptEditor({ transcript, audioUrl, onSave }) {
 // ============================================
 // Export Options Component
 // ============================================
-function ExportOptions({ transcript, jobId }) {
+function ExportOptions({ transcript, jobId, onBackToDashboard }) {
   const [exporting, setExporting] = useState(false);
 
   const generateText = (includeTimestamps) => {
@@ -666,6 +677,31 @@ function ExportOptions({ transcript, jobId }) {
     }).join('\n\n');
   };
 
+  const generateSRT = () => {
+    if (!transcript?.paragraphs) return '';
+    let index = 1;
+    let srt = '';
+    
+    transcript.paragraphs.forEach(para => {
+      para.segments.forEach(seg => {
+        const startTime = formatSRTTime(seg.start);
+        const endTime = formatSRTTime(seg.end);
+        srt += `${index}\n${startTime} --> ${endTime}\n${seg.text}\n\n`;
+        index++;
+      });
+    });
+    
+    return srt;
+  };
+
+  const formatSRTTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 1000);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
+  };
+
   const downloadText = (includeTimestamps) => {
     const text = generateText(includeTimestamps);
     const blob = new Blob([text], { type: 'text/plain' });
@@ -677,27 +713,47 @@ function ExportOptions({ transcript, jobId }) {
     URL.revokeObjectURL(url);
   };
 
-  const downloadWord = async (includeTimestamps) => {
+  const downloadSRT = () => {
+    const srt = generateSRT();
+    const blob = new Blob([srt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${jobId}.srt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadDocx = (includeTimestamps) => {
     setExporting(true);
-    try {
-      const response = await fetch(`${API_BASE}/export/${jobId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ format: 'docx', includeTimestamps })
-      });
-      
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${jobId}${includeTimestamps ? '_timestamped' : ''}.docx`;
-        a.click();
-        URL.revokeObjectURL(url);
+    
+    // Generate DOCX-compatible HTML
+    const content = transcript.paragraphs.map(para => {
+      if (includeTimestamps) {
+        const text = para.segments.map(seg => 
+          `<span style="color:#888;font-size:9pt">${seg.ts}</span> ${seg.text}`
+        ).join(' ');
+        return `<p style="font-family:Georgia;font-size:12pt;line-height:1.8">${text} <span style="color:#888;font-size:9pt">${para.end_ts}</span></p>`;
+      } else {
+        const text = para.segments.map(seg => seg.text).join(' ');
+        return `<p style="font-family:Georgia;font-size:12pt;line-height:1.8">${text}</p>`;
       }
-    } catch (error) {
-      alert('Export failed: ' + error.message);
-    }
+    }).join('');
+
+    const html = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+      <head><meta charset="utf-8"><title>Transcript</title></head>
+      <body>${content}</body>
+      </html>
+    `;
+
+    const blob = new Blob([html], { type: 'application/vnd.ms-word' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${jobId}${includeTimestamps ? '_timestamped' : ''}.doc`;
+    a.click();
+    URL.revokeObjectURL(url);
     setExporting(false);
   };
 
@@ -715,7 +771,7 @@ function ExportOptions({ transcript, jobId }) {
             </svg>
             TXT
           </button>
-          <button onClick={() => downloadWord(true)} disabled={exporting}>
+          <button onClick={() => downloadDocx(true)} disabled={exporting}>
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M6,2H14L20,8V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V4A2,2 0 0,1 6,2M13,3.5V9H18.5L13,3.5M7,13L8.5,18H10.5L12,14L13.5,18H15.5L17,13H15.5L14.5,17L13,13.5H11L9.5,17L8.5,13H7Z"/>
             </svg>
@@ -734,11 +790,25 @@ function ExportOptions({ transcript, jobId }) {
             </svg>
             TXT
           </button>
-          <button onClick={() => downloadWord(false)} disabled={exporting}>
+          <button onClick={() => downloadDocx(false)} disabled={exporting}>
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M6,2H14L20,8V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V4A2,2 0 0,1 6,2M13,3.5V9H18.5L13,3.5M7,13L8.5,18H10.5L12,14L13.5,18H15.5L17,13H15.5L14.5,17L13,13.5H11L9.5,17L8.5,13H7Z"/>
             </svg>
             Word
+          </button>
+        </div>
+      </div>
+
+      <div className="export-group">
+        <span className="export-label">Subtitles</span>
+        <div className="export-buttons">
+          <button onClick={downloadSRT} disabled={exporting}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="2" y="4" width="20" height="16" rx="2"/>
+              <line x1="6" y1="12" x2="18" y2="12"/>
+              <line x1="6" y1="16" x2="14" y2="16"/>
+            </svg>
+            SRT
           </button>
         </div>
       </div>
@@ -751,6 +821,53 @@ function ExportOptions({ transcript, jobId }) {
           <li><strong>Save Changes</strong> - Save all edits</li>
         </ul>
       </div>
+
+      <button className="btn-back-dashboard" onClick={onBackToDashboard}>
+        ← Back to Dashboard
+      </button>
+    </div>
+  );
+}
+
+// ============================================
+// Login Page Component
+// ============================================
+function LoginPage() {
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-logo">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z"/>
+          </svg>
+          <h1>Sermon Transcriber</h1>
+        </div>
+        <p className="login-subtitle">Transcribe your sermons with AI-powered accuracy</p>
+        
+        <div className="login-buttons">
+          <SignInButton mode="modal">
+            <button className="btn-primary btn-large">Sign In</button>
+          </SignInButton>
+          <SignUpButton mode="modal">
+            <button className="btn-secondary btn-large">Create Account</button>
+          </SignUpButton>
+        </div>
+
+        <div className="login-features">
+          <div className="feature">
+            <span className="feature-icon">🎙️</span>
+            <span>Upload audio files</span>
+          </div>
+          <div className="feature">
+            <span className="feature-icon">✨</span>
+            <span>AI transcription</span>
+          </div>
+          <div className="feature">
+            <span className="feature-icon">✏️</span>
+            <span>Edit & export</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -759,6 +876,7 @@ function ExportOptions({ transcript, jobId }) {
 // Main App Component
 // ============================================
 function App() {
+  const { user, isLoaded } = useUser();
   const [currentJobId, setCurrentJobId] = useState(null);
   const [transcript, setTranscript] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
@@ -766,8 +884,12 @@ function App() {
   const [view, setView] = useState('upload');
   const [jobs, setJobs] = useState([]);
 
+  // User-specific storage key
+  const storageKey = user ? `whisper-jobs-${user.id}` : 'whisper-jobs';
+
   useEffect(() => {
-    const savedJobs = localStorage.getItem('whisper-jobs');
+    if (!user) return;
+    const savedJobs = localStorage.getItem(storageKey);
     if (savedJobs) {
       try {
         setJobs(JSON.parse(savedJobs));
@@ -775,19 +897,21 @@ function App() {
         console.error('Failed to load jobs:', e);
       }
     }
-  }, []);
+  }, [user, storageKey]);
 
   useEffect(() => {
+    if (!user) return;
     if (jobs.length > 0) {
-      localStorage.setItem('whisper-jobs', JSON.stringify(jobs));
+      localStorage.setItem(storageKey, JSON.stringify(jobs));
     }
-  }, [jobs]);
+  }, [jobs, user, storageKey]);
 
   const handleUploadComplete = (jobId, originalName) => {
     setCurrentJobId(jobId);
     const newJob = {
       jobId,
       originalName,
+      userId: user?.id,
       status: 'queued',
       createdAt: new Date().toISOString()
     };
@@ -810,13 +934,19 @@ function App() {
       
       setJobs(prev => prev.map(job => 
         job.jobId === (statusData.jobId || currentJobId)
-          ? { ...job, status: 'completed', audioDuration: data.duration, processingTime: statusData.processingTime }
+          ? { 
+              ...job, 
+              status: 'completed', 
+              audioDuration: data.duration || statusData.audioDuration,
+              processingTime: data.processing_time || statusData.processingTime
+            }
           : job
       ));
       
       setView('editor');
     } catch (error) {
       console.error('Failed to load transcript:', error);
+      setView('upload');
     }
   };
 
@@ -850,63 +980,83 @@ function App() {
     setView('upload');
   };
 
+  // Show loading while Clerk initializes
+  if (!isLoaded) {
+    return (
+      <div className="app loading">
+        <div className="loading-spinner">Loading...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
-      <header className="app-header">
-        <div className="logo" onClick={resetToUpload}>
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z"/>
-          </svg>
-          <span>Sermon Transcriber</span>
-        </div>
-        {view !== 'upload' && (
-          <button className="btn-secondary" onClick={resetToUpload}>
-            New Upload
-          </button>
-        )}
-      </header>
+      {/* Show login page if not signed in */}
+      <SignedOut>
+        <LoginPage />
+      </SignedOut>
 
-      <main className="app-main">
-        {view === 'upload' && (
-          <>
-            <UploadPanel
-              onUploadComplete={handleUploadComplete}
-              isUploading={isUploading}
-              setIsUploading={setIsUploading}
-            />
-            <JobsHistory 
-              jobs={jobs} 
-              onSelectJob={handleSelectJob}
-              currentJobId={currentJobId}
-            />
-          </>
-        )}
-
-        {view === 'processing' && (
-          <StatusPanel
-            jobId={currentJobId}
-            onTranscriptReady={handleTranscriptReady}
-            onStatusUpdate={handleStatusUpdate}
-          />
-        )}
-
-        {view === 'editor' && transcript && (
-          <div className="editor-layout">
-            <TranscriptEditor
-              transcript={transcript}
-              audioUrl={audioUrl}
-              onSave={handleSaveTranscript}
-            />
-            <aside className="editor-sidebar">
-              <ExportOptions transcript={transcript} jobId={currentJobId} />
-            </aside>
+      {/* Show main app if signed in */}
+      <SignedIn>
+        <header className="app-header">
+          <div className="logo" onClick={resetToUpload}>
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z"/>
+            </svg>
+            <span>Sermon Transcriber</span>
           </div>
-        )}
-      </main>
+          <div className="header-right">
+            {view !== 'upload' && (
+              <button className="btn-secondary" onClick={resetToUpload}>
+                New Upload
+              </button>
+            )}
+            <UserButton afterSignOutUrl="/" />
+          </div>
+        </header>
 
-      <footer className="app-footer">
-        <span>Whisper Transcription Service</span>
-      </footer>
+        <main className="app-main">
+          {view === 'upload' && (
+            <>
+              <UploadPanel
+                onUploadComplete={handleUploadComplete}
+                isUploading={isUploading}
+                setIsUploading={setIsUploading}
+              />
+              <JobsHistory 
+                jobs={jobs} 
+                onSelectJob={handleSelectJob}
+                currentJobId={currentJobId}
+              />
+            </>
+          )}
+
+          {view === 'processing' && (
+            <StatusPanel
+              jobId={currentJobId}
+              onTranscriptReady={handleTranscriptReady}
+              onStatusUpdate={handleStatusUpdate}
+            />
+          )}
+
+          {view === 'editor' && transcript && (
+            <div className="editor-layout">
+              <TranscriptEditor
+                transcript={transcript}
+                audioUrl={audioUrl}
+                onSave={handleSaveTranscript}
+              />
+              <aside className="editor-sidebar">
+                <ExportOptions transcript={transcript} jobId={currentJobId} onBackToDashboard={resetToUpload} />
+              </aside>
+            </div>
+          )}
+        </main>
+
+        <footer className="app-footer">
+          <span>Whisper Transcription Service</span>
+        </footer>
+      </SignedIn>
     </div>
   );
 }
