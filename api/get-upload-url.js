@@ -1,17 +1,12 @@
-import { BlobServiceClient, generateBlobSASQueryParameters, BlobSASPermissions, StorageSharedKeyCredential } from '@azure/storage-blob';
-import { QueueClient } from '@azure/storage-queue';
+const { BlobServiceClient, StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions } = require('@azure/storage-blob');
 
-export const config = {
-  runtime: 'edge',
-};
-
-export default async function handler(req) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { filename, interpreterMode, englishOnly } = await req.json();
+    const { filename, interpreterMode, englishOnly } = req.body;
     
     const accountName = process.env.AZURE_STORAGE_ACCOUNT;
     const accountKey = process.env.AZURE_STORAGE_KEY;
@@ -42,24 +37,21 @@ export default async function handler(req) {
     const sasToken = generateBlobSASQueryParameters({
       containerName,
       blobName,
-      permissions: BlobSASPermissions.parse('cw'), // create, write
+      permissions: BlobSASPermissions.parse('cw'),
       startsOn,
       expiresOn,
     }, sharedKeyCredential).toString();
     
     const uploadUrl = `${blobClient.url}?${sasToken}`;
     
-    return new Response(JSON.stringify({
+    return res.status(200).json({
       uploadUrl,
       jobId,
       blobName
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
     });
     
   } catch (error) {
     console.error('Error:', error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return res.status(500).json({ error: error.message });
   }
-}
+};

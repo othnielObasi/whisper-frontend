@@ -1,16 +1,11 @@
-import { BlobServiceClient, generateBlobSASQueryParameters, BlobSASPermissions, StorageSharedKeyCredential } from '@azure/storage-blob';
+const { BlobServiceClient, StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions } = require('@azure/storage-blob');
 
-export const config = {
-  runtime: 'edge',
-};
-
-export default async function handler(req) {
+module.exports = async function handler(req, res) {
   try {
-    const url = new URL(req.url);
-    const jobId = url.pathname.split('/').pop();
+    const { jobId } = req.query;
     
     if (!jobId) {
-      return new Response(JSON.stringify({ error: 'Job ID required' }), { status: 400 });
+      return res.status(400).json({ error: 'Job ID required' });
     }
     
     const accountName = process.env.AZURE_STORAGE_ACCOUNT;
@@ -37,7 +32,7 @@ export default async function handler(req) {
     }
     
     if (!audioBlob) {
-      return new Response(JSON.stringify({ error: 'Audio not found' }), { status: 404 });
+      return res.status(404).json({ error: 'Audio not found' });
     }
     
     // Generate read-only SAS URL
@@ -56,10 +51,10 @@ export default async function handler(req) {
     const sasUrl = `${blobClient.url}?${sasToken}`;
     
     // Redirect to SAS URL for streaming
-    return Response.redirect(sasUrl, 302);
+    return res.redirect(302, sasUrl);
     
   } catch (error) {
     console.error('Error:', error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return res.status(500).json({ error: error.message });
   }
-}
+};

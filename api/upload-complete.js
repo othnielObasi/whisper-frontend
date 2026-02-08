@@ -1,16 +1,12 @@
-import { QueueClient } from '@azure/storage-queue';
+const { QueueClient } = require('@azure/storage-queue');
 
-export const config = {
-  runtime: 'edge',
-};
-
-export default async function handler(req) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { jobId, blobName, interpreterMode, englishOnly, originalName } = await req.json();
+    const { jobId, blobName, interpreterMode, englishOnly, originalName } = req.body;
     
     const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
     const queueName = 'whisper-jobs';
@@ -33,16 +29,13 @@ export default async function handler(req) {
     const encodedMessage = Buffer.from(JSON.stringify(message)).toString('base64');
     await queueClient.sendMessage(encodedMessage);
     
-    return new Response(JSON.stringify({
+    return res.status(200).json({
       status: 'queued',
       jobId
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
     });
     
   } catch (error) {
     console.error('Error:', error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return res.status(500).json({ error: error.message });
   }
-}
+};

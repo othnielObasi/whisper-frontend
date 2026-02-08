@@ -1,16 +1,11 @@
-import { BlobServiceClient } from '@azure/storage-blob';
+const { BlobServiceClient } = require('@azure/storage-blob');
 
-export const config = {
-  runtime: 'edge',
-};
-
-export default async function handler(req) {
+module.exports = async function handler(req, res) {
   try {
-    const url = new URL(req.url);
-    const jobId = url.pathname.split('/').pop();
+    const { jobId } = req.query;
     
     if (!jobId) {
-      return new Response(JSON.stringify({ error: 'Job ID required' }), { status: 400 });
+      return res.status(400).json({ error: 'Job ID required' });
     }
     
     const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
@@ -43,14 +38,11 @@ export default async function handler(req) {
     }
     
     if (completed) {
-      return new Response(JSON.stringify({
+      return res.status(200).json({
         jobId,
         status: 'completed',
         processingTime,
         audioDuration
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
       });
     }
     
@@ -64,28 +56,22 @@ export default async function handler(req) {
     }
     
     if (audioExists) {
-      return new Response(JSON.stringify({
+      return res.status(200).json({
         jobId,
         status: 'processing'
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
       });
     }
     
-    return new Response(JSON.stringify({
+    return res.status(404).json({
       jobId,
       status: 'not_found'
-    }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' }
     });
     
   } catch (error) {
     console.error('Error:', error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return res.status(500).json({ error: error.message });
   }
-}
+};
 
 async function streamToString(readableStream) {
   const chunks = [];
