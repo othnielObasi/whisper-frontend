@@ -1,41 +1,71 @@
-import { QueueClient } from '@azure/storage-queue';
+import { QueueClient } from "@azure/storage-queue";
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  // CORS (adjust if you want to lock down)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    const { jobId, blobName, interpreterMode, englishOnly, originalName } = req.body;
-    
     const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
-    const queueName = 'whisper-jobs';
-    
-    // Queue the transcription job
+
+    // IMPORTANT: default this to the queue your worker actually reads
+    // Based on your CLI checks earlier, that is "audio-jobs"
+    const queueName = process.env.AZURE_QUEUE_NAME || "audio-jobs";
+
+    const inputContainer = process.env.AZURE_STORAGE_CONTAINER || "audio-input";
+    const outputContainer = process.env.AZURE_OUTPUT_CONTAINER || "transcripts";
+
+    if (!connectionString) {
+      return res.status(500).json({ error: "Missing env: AZURE_STORAGE_CONNECTION_STRING" });
+    }
+
+    const { jobId, blobName, interpreterMode, englishOnly, originalName } = req.body || {};
+
+    if (!jobId || typeof jobId !== "string") {
+      return res.status(400).json({ error: "jobId is required" });
+    }
+    if (!blobName || typeof blobName !== "string") {
+      return res.status(400).json({ error: "blobName is required" });
+    }
+
     const queueClient = new QueueClient(connectionString, queueName);
-    
+
+    // Ensure queue exists
+    await queueClient.createIfNotExists();
+
+    // IMPORTANT: send plain JSON string.
+    // Do NOT base64-encode manually. The SDK handles message encoding.
     const message = {
       blob_name: blobName,
-      container: 'audio-input',
-      output_container: 'transcripts',
+      blob_url: "", // optional; worker can use blob_name + container via connection string
+      container: inputContainer,
+      output_container: outputContainer,
       job_id: jobId,
-      original_name: originalName,
-      interpreter_present: interpreterMode || false,
-      transcribe_option: englishOnly ? 'english_only' : 'both_separate',
-      event_time: new Date().toISOString()
+      original_name: originalName || blobName,
+      interpreter_present: Boolean(interpreterMode),
+      transcribe_option: englishOnly ? "english_only" : "both_separate",
+      event_time: new Date().toISOString(),
     };
-    
-    // Base64 encode for Azure Queue
-    const encodedMessage = Buffer.from(JSON.stringify(message)).toString('base64');
-    await queueClient.sendMessage(encodedMessage);
-    
+
+    await queueClient.sendMessage(JSON.stringify(message));
+
     return res.status(200).json({
-      status: 'queued',
-      jobId
+      status: "queued",
+      jobId,
+      queue: queueName,
     });
-    
-  } catch (error) {
-    console.error('Error:', error);
-    return res.status(500).json({ error: error.message });
+  } catch (e) {
+    console.error("upload-complete error:", e);
+    return res.status(500).json({ error: e?.message || "Unknown error" });
   }
 }
+
+export const config = {
+  runtime: "nodejs",
+};
+
+
