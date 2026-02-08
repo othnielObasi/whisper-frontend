@@ -1,57 +1,90 @@
-import { BlobServiceClient, StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions } from '@azure/storage-blob';
+import {
+  BlobServiceClient,
+  StorageSharedKeyCredential,
+  generateBlobSASQueryParameters,
+  BlobSASPermissions,
+} from "@azure/storage-blob";
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  // CORS (adjust if you want to lock down)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    const { filename, interpreterMode, englishOnly } = req.body;
-    
     const accountName = process.env.AZURE_STORAGE_ACCOUNT;
     const accountKey = process.env.AZURE_STORAGE_KEY;
-    const containerName = 'audio-input';
-    
-    // Generate job ID
+    const containerName = process.env.AZURE_STORAGE_CONTAINER || "audio-input";
+
+    if (!accountName || !accountKey) {
+      return res.status(500).json({
+        error: "Missing env: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY",
+      });
+    }
+
+    const { filename } = req.body || {};
+    if (!filename || typeof filename !== "string") {
+      return res.status(400).json({ error: "filename is required" });
+    }
+
+    // jobId like: 20260208_222853_ab12cd34
     const now = new Date();
-    const jobId = `${now.toISOString().slice(0, 10).replace(/-/g, '')}_${now.toISOString().slice(11, 19).replace(/:/g, '')}_${Math.random().toString(36).slice(2, 10)}`;
-    
-    // Get file extension
-    const ext = filename.split('.').pop() || 'mp3';
+    const datePart = now.toISOString().slice(0, 10).replace(/-/g, "");
+    const timePart = now.toISOString().slice(11, 19).replace(/:/g, "");
+    const randPart = Math.random().toString(36).slice(2, 10);
+    const jobId = `${datePart}_${timePart}_${randPart}`;
+
+    // extension
+    const ext = (() => {
+      const parts = filename.split(".");
+      const last = parts.length > 1 ? parts.pop() : "mp3";
+      const clean = String(last || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return clean || "mp3";
+    })();
+
     const blobName = `${jobId}.${ext}`;
-    
-    // Generate SAS URL for direct upload
-    const sharedKeyCredential = new StorageSharedKeyCredential(accountName, accountKey);
-    const blobServiceClient = new BlobServiceClient(
+
+    const cred = new StorageSharedKeyCredential(accountName, accountKey);
+    const blobService = new BlobServiceClient(
       `https://${accountName}.blob.core.windows.net`,
-      sharedKeyCredential
+      cred
     );
-    
-    const containerClient = blobServiceClient.getContainerClient(containerName);
-    const blobClient = containerClient.getBlockBlobClient(blobName);
-    
-    // SAS token valid for 1 hour
-    const startsOn = new Date();
-    const expiresOn = new Date(startsOn.valueOf() + 3600 * 1000);
-    
-    const sasToken = generateBlobSASQueryParameters({
-      containerName,
-      blobName,
-      permissions: BlobSASPermissions.parse('cw'),
-      startsOn,
-      expiresOn,
-    }, sharedKeyCredential).toString();
-    
-    const uploadUrl = `${blobClient.url}?${sasToken}`;
-    
+
+    const container = blobService.getContainerClient(containerName);
+
+    // Optional: ensure the container exists
+    await container.createIfNotExists();
+
+    const blobClient = container.getBlockBlobClient(blobName);
+
+    // SAS validity (clock skew buffer)
+    const startsOn = new Date(Date.now() - 2 * 60 * 1000);
+    const expiresOn = new Date(Date.now() + 60 * 60 * 1000);
+
+    const sasToken = generateBlobSASQueryParameters(
+      {
+        containerName,
+        blobName,
+        permissions: BlobSASPermissions.parse("cw"), // create + write
+        startsOn,
+        expiresOn,
+        protocol: "https",
+      },
+      cred
+    ).toString();
+
     return res.status(200).json({
-      uploadUrl,
+      uploadUrl: `${blobClient.url}?${sasToken}`,
       jobId,
-      blobName
+      blobName,
+      containerName,
+      expiresOn: expiresOn.toISOString(),
     });
-    
-  } catch (error) {
-    console.error('Error:', error);
-    return res.status(500).json({ error: error.message });
+  } catch (e) {
+    console.error("get-upload-url error:", e);
+    return res.status(500).json({ error: e?.message || "Unknown error" });
   }
 }
