@@ -5,29 +5,13 @@ import {
   BlobSASPermissions,
 } from "@azure/storage-blob";
 
-/**
- * Vercel Serverless Function (ESM)
- * Generates a short-lived SAS URL for direct browser upload to Azure Blob Storage.
- *
- * ENV required:
- *  - AZURE_STORAGE_ACCOUNT
- *  - AZURE_STORAGE_KEY
- * Optional:
- *  - AZURE_STORAGE_CONTAINER (default: audio-input)
- */
 export default async function handler(req, res) {
-  // Basic CORS (adjust if you want to lock it down)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
     const accountName = process.env.AZURE_STORAGE_ACCOUNT;
@@ -36,8 +20,7 @@ export default async function handler(req, res) {
 
     if (!accountName || !accountKey) {
       return res.status(500).json({
-        error:
-          "Server misconfigured: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY are required.",
+        error: "Server misconfigured: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY are required.",
       });
     }
 
@@ -46,27 +29,24 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "filename is required" });
     }
 
-    // Generate job ID
     const now = new Date();
     const datePart = now.toISOString().slice(0, 10).replace(/-/g, "");
     const timePart = now.toISOString().slice(11, 19).replace(/:/g, "");
     const randPart = Math.random().toString(36).slice(2, 10);
     const jobId = `${datePart}_${timePart}_${randPart}`;
 
-    // Safe extension extraction
     const ext = (() => {
       const parts = filename.split(".");
       const last = parts.length > 1 ? parts.pop() : "mp3";
-      const clean = String(last || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const clean = String(last || "mp3")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
       return clean || "mp3";
     })();
 
     const blobName = `${jobId}.${ext}`;
 
-    const sharedKeyCredential = new StorageSharedKeyCredential(
-      accountName,
-      accountKey
-    );
+    const sharedKeyCredential = new StorageSharedKeyCredential(accountName, accountKey);
 
     const blobServiceClient = new BlobServiceClient(
       `https://${accountName}.blob.core.windows.net`,
@@ -74,18 +54,13 @@ export default async function handler(req, res) {
     );
 
     const containerClient = blobServiceClient.getContainerClient(containerName);
-
-    // Optional: ensure container exists (safe; avoids silent 404s)
-    // If you prefer not to create from API, remove this line and pre-create the container in Azure.
     await containerClient.createIfNotExists();
 
     const blobClient = containerClient.getBlockBlobClient(blobName);
 
-    // SAS token valid for 1 hour
-    const startsOn = new Date(Date.now() - 2 * 60 * 1000); // small clock-skew buffer
+    const startsOn = new Date(Date.now() - 2 * 60 * 1000);
     const expiresOn = new Date(Date.now() + 60 * 60 * 1000);
 
-    // "c" = create, "w" = write (enough for browser upload)
     const sasToken = generateBlobSASQueryParameters(
       {
         containerName,
@@ -112,3 +87,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: error?.message || "Unknown error" });
   }
 }
+
+export const config = {
+  runtime: "nodejs",
+};
