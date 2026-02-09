@@ -1054,7 +1054,7 @@ function App() {
         </main>
 
         <footer className="app-footer">
-          <span>Whisper Transcription Service</span>
+          <span>Godstone Tabernacle Sermon Transcription</span>
         </footer>
       </SignedIn>
     </div>
