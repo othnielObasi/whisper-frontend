@@ -62,21 +62,23 @@ function encodeWAV(audioBuffer, startSample, endSample) {
 function TrimModal({ file, onTrimComplete, onCancel }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
-  const audioRef = useRef(null);
   const audioBufferRef = useRef(null);
   const audioContextRef = useRef(null);
   const sourceNodeRef = useRef(null);
   const animFrameRef = useRef(null);
+  const scrubRef = useRef(null);
+  const peaksRef = useRef(null);
 
   const [loading, setLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
-  const [dragging, setDragging] = useState(null); // 'start' | 'end' | 'region' | null
+  const [dragging, setDragging] = useState(null);
   const [dragOrigin, setDragOrigin] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
-  const [playMode, setPlayMode] = useState('selection'); // 'selection' | 'full'
+  const [playMode, setPlayMode] = useState('selection');
   const playStartRef = useRef(0);
   const playOffsetRef = useRef(0);
 
@@ -85,14 +87,37 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     let cancelled = false;
     const decode = async () => {
       try {
+        setLoadProgress(20);
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         audioContextRef.current = ctx;
         const arrayBuffer = await file.arrayBuffer();
+        if (cancelled) return;
+        setLoadProgress(50);
         const decoded = await ctx.decodeAudioData(arrayBuffer);
         if (cancelled) return;
+        setLoadProgress(80);
         audioBufferRef.current = decoded;
+
+        // Pre-compute peaks for fast rendering
+        const data = decoded.getChannelData(0);
+        const numPeaks = 2000;
+        const samplesPerPeak = Math.floor(data.length / numPeaks);
+        const peaks = [];
+        for (let i = 0; i < numPeaks; i++) {
+          let min = 1, max = -1;
+          const offset = i * samplesPerPeak;
+          for (let j = 0; j < samplesPerPeak; j += 2) {
+            const val = data[offset + j] || 0;
+            if (val < min) min = val;
+            if (val > max) max = val;
+          }
+          peaks.push({ min, max });
+        }
+        peaksRef.current = peaks;
+
         setDuration(decoded.duration);
         setTrimEnd(decoded.duration);
+        setLoadProgress(100);
         setLoading(false);
       } catch (e) {
         console.error('Failed to decode audio:', e);
@@ -106,11 +131,10 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
 
   // Draw waveform
   useEffect(() => {
-    if (loading || !audioBufferRef.current || !canvasRef.current) return;
+    if (loading || !peaksRef.current || !canvasRef.current) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    const buffer = audioBufferRef.current;
-    const data = buffer.getChannelData(0);
+    const peaks = peaksRef.current;
     const dpr = window.devicePixelRatio || 1;
 
     const rect = canvas.getBoundingClientRect();
@@ -121,71 +145,72 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     const w = rect.width;
     const h = rect.height;
     const mid = h / 2;
-    const samplesPerPixel = Math.floor(data.length / w);
+    const barWidth = w / peaks.length;
 
     // Background
-    ctx.fillStyle = '#FAF8F5';
+    ctx.fillStyle = '#F8F5F0';
     ctx.fillRect(0, 0, w, h);
 
-    // Dimmed regions (outside trim)
+    // Center line
+    ctx.strokeStyle = '#E5DFD6';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(w, mid);
+    ctx.stroke();
+
     const startX = (trimStart / duration) * w;
     const endX = (trimEnd / duration) * w;
 
-    // Draw full waveform dimmed
-    ctx.fillStyle = '#D4C9BB';
-    for (let x = 0; x < w; x++) {
-      let min = 1, max = -1;
-      const start = x * samplesPerPixel;
-      for (let j = 0; j < samplesPerPixel; j += 4) {
-        const val = data[start + j] || 0;
-        if (val < min) min = val;
-        if (val > max) max = val;
+    // Draw dimmed waveform (outside selection)
+    for (let i = 0; i < peaks.length; i++) {
+      const x = i * barWidth;
+      const { min, max } = peaks[i];
+      const topH = max * mid * 0.85;
+      const bottomH = -min * mid * 0.85;
+      const isInSelection = x >= startX && x <= endX;
+
+      if (!isInSelection) {
+        ctx.fillStyle = '#D4C9BB';
+        // Top bar
+        const barW = Math.max(1, barWidth - 0.5);
+        ctx.fillRect(x, mid - topH, barW, topH);
+        // Bottom bar
+        ctx.fillRect(x, mid, barW, bottomH);
       }
-      const top = (1 - max) * mid;
-      const bottom = (1 - min) * mid;
-      ctx.fillRect(x, top, 1, bottom - top);
     }
 
-    // Draw selected region highlighted
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(startX, 0, endX - startX, h);
-    ctx.clip();
-    ctx.fillStyle = '#FAF8F5';
-    ctx.fillRect(startX, 0, endX - startX, h);
-    ctx.fillStyle = '#8B5A2B';
-    for (let x = Math.floor(startX); x < Math.ceil(endX); x++) {
-      let min = 1, max = -1;
-      const start = x * samplesPerPixel;
-      for (let j = 0; j < samplesPerPixel; j += 4) {
-        const val = data[start + j] || 0;
-        if (val < min) min = val;
-        if (val > max) max = val;
+    // Draw selected waveform with gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, '#B07840');
+    gradient.addColorStop(0.4, '#8B5A2B');
+    gradient.addColorStop(0.6, '#8B5A2B');
+    gradient.addColorStop(1, '#B07840');
+
+    for (let i = 0; i < peaks.length; i++) {
+      const x = i * barWidth;
+      const { min, max } = peaks[i];
+      const topH = max * mid * 0.85;
+      const bottomH = -min * mid * 0.85;
+      const isInSelection = x >= startX && x <= endX;
+
+      if (isInSelection) {
+        ctx.fillStyle = gradient;
+        const barW = Math.max(1, barWidth - 0.5);
+        ctx.fillRect(x, mid - topH, barW, topH);
+        ctx.fillRect(x, mid, barW, bottomH);
       }
-      const top = (1 - max) * mid;
-      const bottom = (1 - min) * mid;
-      ctx.fillRect(x, top, 1, Math.max(1, bottom - top));
     }
-    ctx.restore();
 
     // Dim overlay outside selection
-    ctx.fillStyle = 'rgba(245, 242, 237, 0.6)';
+    ctx.fillStyle = 'rgba(248, 245, 240, 0.45)';
     ctx.fillRect(0, 0, startX, h);
     ctx.fillRect(endX, 0, w - endX, h);
 
-    // Playhead
-    if (playbackTime > 0) {
-      const playX = (playbackTime / duration) * w;
-      ctx.strokeStyle = '#E74C3C';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(playX, 0);
-      ctx.lineTo(playX, h);
-      ctx.stroke();
-    }
-
-    // Handle lines
-    ctx.strokeStyle = '#6B4423';
+    // Selection boundary glow
+    ctx.shadowColor = 'rgba(139, 90, 43, 0.3)';
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = '#8B5A2B';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(startX, 0);
@@ -195,8 +220,28 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     ctx.moveTo(endX, 0);
     ctx.lineTo(endX, h);
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
-  }, [loading, trimStart, trimEnd, duration, playbackTime]);
+    // Playhead
+    if (playbackTime > 0 && isPlaying) {
+      const playX = (playbackTime / duration) * w;
+      ctx.strokeStyle = '#E74C3C';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(playX, 0);
+      ctx.lineTo(playX, h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Playhead dot
+      ctx.fillStyle = '#E74C3C';
+      ctx.beginPath();
+      ctx.arc(playX, 6, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+  }, [loading, trimStart, trimEnd, duration, playbackTime, isPlaying]);
 
   // Playback animation loop
   useEffect(() => {
@@ -222,6 +267,23 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [isPlaying, trimEnd, duration, playMode]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (loading) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (isPlaying) stopPlayback();
+        else { setPlayMode('selection'); playAudio(trimStart, trimEnd); }
+      } else if (e.code === 'Escape') {
+        stopPlayback();
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [loading, isPlaying, trimStart, trimEnd]);
+
   const stopPlayback = useCallback(() => {
     if (sourceNodeRef.current) {
       try { sourceNodeRef.current.stop(); } catch {}
@@ -230,12 +292,29 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     setIsPlaying(false);
   }, []);
 
+  const scrubAudio = useCallback((time) => {
+    const ctx = audioContextRef.current;
+    const buffer = audioBufferRef.current;
+    if (!ctx || !buffer) return;
+    if (ctx.state === 'suspended') ctx.resume();
+    if (scrubRef.current) {
+      try { scrubRef.current.stop(); } catch {}
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    const snippetLen = 0.12;
+    const safeTime = Math.max(0, Math.min(time, buffer.duration - snippetLen));
+    source.start(0, safeTime, snippetLen);
+    scrubRef.current = source;
+    setPlaybackTime(time);
+  }, []);
+
   const playAudio = useCallback((fromTime, toTime) => {
     stopPlayback();
     const ctx = audioContextRef.current;
     const buffer = audioBufferRef.current;
     if (!ctx || !buffer) return;
-
     if (ctx.state === 'suspended') ctx.resume();
 
     const source = ctx.createBufferSource();
@@ -245,7 +324,6 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
       setIsPlaying(false);
       setPlaybackTime(0);
     };
-
     playStartRef.current = ctx.currentTime;
     playOffsetRef.current = fromTime;
     source.start(0, fromTime, toTime - fromTime);
@@ -254,31 +332,34 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     setPlaybackTime(fromTime);
   }, [stopPlayback]);
 
-  // Mouse/touch handling for handles
+  // Pointer handling
   const getTimeFromX = useCallback((clientX) => {
     if (!containerRef.current || !duration) return 0;
     const rect = containerRef.current.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return ratio * duration;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * duration;
   }, [duration]);
 
   const handlePointerDown = useCallback((e, type) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isPlaying) stopPlayback();
     setDragging(type);
     if (type === 'region') {
       setDragOrigin({ x: e.clientX, start: trimStart, end: trimEnd });
     }
-  }, [trimStart, trimEnd]);
+  }, [trimStart, trimEnd, isPlaying, stopPlayback]);
 
   const handlePointerMove = useCallback((e) => {
     if (!dragging) return;
     const time = getTimeFromX(e.clientX);
-
     if (dragging === 'start') {
-      setTrimStart(Math.max(0, Math.min(time, trimEnd - 1)));
+      const t = Math.max(0, Math.min(time, trimEnd - 1));
+      setTrimStart(t);
+      scrubAudio(t);
     } else if (dragging === 'end') {
-      setTrimEnd(Math.min(duration, Math.max(time, trimStart + 1)));
+      const t = Math.min(duration, Math.max(time, trimStart + 1));
+      setTrimEnd(t);
+      scrubAudio(t);
     } else if (dragging === 'region' && dragOrigin) {
       const dx = e.clientX - dragOrigin.x;
       const rect = containerRef.current.getBoundingClientRect();
@@ -291,7 +372,7 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
       setTrimStart(newStart);
       setTrimEnd(newEnd);
     }
-  }, [dragging, trimStart, trimEnd, duration, getTimeFromX, dragOrigin]);
+  }, [dragging, trimStart, trimEnd, duration, getTimeFromX, dragOrigin, scrubAudio]);
 
   const handlePointerUp = useCallback(() => {
     setDragging(null);
@@ -309,7 +390,6 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     }
   }, [dragging, handlePointerMove, handlePointerUp]);
 
-  // Click on waveform to seek
   const handleWaveformClick = useCallback((e) => {
     if (dragging) return;
     const time = getTimeFromX(e.clientX);
@@ -335,132 +415,191 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
+    return `${m}:${s.toString().padStart(2, '0')}.${ms}`;
+  };
+
+  const formatTimeShort = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
     if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   const trimmedDuration = trimEnd - trimStart;
+  const savingsPercent = duration > 0 ? Math.round(((duration - trimmedDuration) / duration) * 100) : 0;
 
   return (
-    <div className="trim-modal-overlay" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
-      <div className="trim-modal">
+    <div className="trim-modal-overlay">
+      <div className="trim-modal" onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
         <div className="trim-modal-header">
-          <h2>Trim Audio</h2>
-          <button className="trim-close-btn" onClick={() => { stopPlayback(); onCancel(); }}>
+          <div className="trim-header-left">
+            <div className="trim-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="22" height="22">
+                <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/>
+                <line x1="8.12" y1="8.12" x2="12" y2="12"/>
+              </svg>
+            </div>
+            <div>
+              <h2>Trim Audio</h2>
+              <p className="trim-filename">{file.name}</p>
+            </div>
+          </div>
+          <button className="trim-close-btn" onClick={() => { stopPlayback(); onCancel(); }} title="Close (Esc)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
         </div>
 
-        <p className="trim-filename">{file.name}</p>
-
         {loading ? (
           <div className="trim-loading">
-            <div className="trim-spinner" />
-            <p>Decoding audio...</p>
+            <div className="trim-load-ring">
+              <svg viewBox="0 0 48 48">
+                <circle className="trim-load-track" cx="24" cy="24" r="20" />
+                <circle className="trim-load-fill" cx="24" cy="24" r="20"
+                  style={{ strokeDashoffset: 126 - (126 * loadProgress / 100) }} />
+              </svg>
+              <span className="trim-load-percent">{loadProgress}%</span>
+            </div>
+            <p>Decoding audio file...</p>
           </div>
         ) : (
           <>
-            <div className="trim-time-display">
-              <div className="trim-time-item">
-                <span className="trim-time-label">Start</span>
-                <span className="trim-time-value">{formatTime(trimStart)}</span>
+            {/* Time bar */}
+            <div className="trim-time-bar">
+              <div className="trim-time-card trim-time-start">
+                <span className="trim-time-icon">◀</span>
+                <div>
+                  <span className="trim-time-label">Start</span>
+                  <span className="trim-time-value">{formatTime(trimStart)}</span>
+                </div>
               </div>
-              <div className="trim-time-item trim-time-duration">
-                <span className="trim-time-label">Selection</span>
-                <span className="trim-time-value">{formatTime(trimmedDuration)}</span>
+              <div className="trim-time-card trim-time-selection">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                  <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                  <line x1="20" y1="4" x2="8.12" y2="15.88" stroke="currentColor" strokeWidth="2" fill="none"/>
+                </svg>
+                <div>
+                  <span className="trim-time-label">Selection</span>
+                  <span className="trim-time-value">{formatTime(trimmedDuration)}</span>
+                </div>
               </div>
-              <div className="trim-time-item">
-                <span className="trim-time-label">End</span>
-                <span className="trim-time-value">{formatTime(trimEnd)}</span>
-              </div>
-            </div>
-
-            <div className="trim-waveform-container" ref={containerRef} onClick={handleWaveformClick}>
-              <canvas ref={canvasRef} className="trim-waveform-canvas" />
-              
-              {/* Start handle */}
-              <div
-                className="trim-handle trim-handle-start"
-                style={{ left: `${(trimStart / duration) * 100}%` }}
-                onPointerDown={(e) => handlePointerDown(e, 'start')}
-              >
-                <div className="trim-handle-bar" />
-                <div className="trim-handle-flag">◀</div>
-              </div>
-
-              {/* Draggable selected region */}
-              <div
-                className="trim-region"
-                style={{
-                  left: `${(trimStart / duration) * 100}%`,
-                  width: `${((trimEnd - trimStart) / duration) * 100}%`
-                }}
-                onPointerDown={(e) => handlePointerDown(e, 'region')}
-              />
-
-              {/* End handle */}
-              <div
-                className="trim-handle trim-handle-end"
-                style={{ left: `${(trimEnd / duration) * 100}%` }}
-                onPointerDown={(e) => handlePointerDown(e, 'end')}
-              >
-                <div className="trim-handle-bar" />
-                <div className="trim-handle-flag">▶</div>
+              <div className="trim-time-card trim-time-end">
+                <div>
+                  <span className="trim-time-label">End</span>
+                  <span className="trim-time-value">{formatTime(trimEnd)}</span>
+                </div>
+                <span className="trim-time-icon">▶</span>
               </div>
             </div>
 
-            <div className="trim-time-axis">
-              <span>{formatTime(0)}</span>
-              <span>{formatTime(duration / 4)}</span>
-              <span>{formatTime(duration / 2)}</span>
-              <span>{formatTime((duration * 3) / 4)}</span>
-              <span>{formatTime(duration)}</span>
+            {/* Waveform */}
+            <div className="trim-waveform-wrap">
+              <div className="trim-waveform-container" ref={containerRef} onClick={handleWaveformClick}>
+                <canvas ref={canvasRef} className="trim-waveform-canvas" />
+
+                {/* Handles */}
+                <div
+                  className={`trim-handle trim-handle-start ${dragging === 'start' ? 'dragging' : ''}`}
+                  style={{ left: `${(trimStart / duration) * 100}%` }}
+                  onPointerDown={(e) => handlePointerDown(e, 'start')}
+                >
+                  <div className="trim-handle-grip">
+                    <span /><span /><span />
+                  </div>
+                </div>
+
+                <div
+                  className="trim-region"
+                  style={{
+                    left: `${(trimStart / duration) * 100}%`,
+                    width: `${((trimEnd - trimStart) / duration) * 100}%`
+                  }}
+                  onPointerDown={(e) => handlePointerDown(e, 'region')}
+                />
+
+                <div
+                  className={`trim-handle trim-handle-end ${dragging === 'end' ? 'dragging' : ''}`}
+                  style={{ left: `${(trimEnd / duration) * 100}%` }}
+                  onPointerDown={(e) => handlePointerDown(e, 'end')}
+                >
+                  <div className="trim-handle-grip">
+                    <span /><span /><span />
+                  </div>
+                </div>
+              </div>
+
+              {/* Time axis */}
+              <div className="trim-time-axis">
+                {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
+                  <span key={pct} style={{ left: `${pct * 100}%` }}>{formatTimeShort(pct * duration)}</span>
+                ))}
+              </div>
             </div>
 
-            <div className="trim-controls">
-              <div className="trim-play-group">
+            {/* Transport controls */}
+            <div className="trim-transport">
+              <div className="trim-transport-left">
                 <button
-                  className={`trim-play-btn ${isPlaying && playMode === 'selection' ? 'playing' : ''}`}
+                  className={`trim-transport-btn trim-btn-play ${isPlaying ? 'active' : ''}`}
                   onClick={() => {
                     if (isPlaying) { stopPlayback(); }
                     else { setPlayMode('selection'); playAudio(trimStart, trimEnd); }
                   }}
+                  title="Play selection (Space)"
                 >
                   {isPlaying && playMode === 'selection' ? (
-                    <><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg> Stop</>
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
                   ) : (
-                    <><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg> Play Selection</>
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
                   )}
                 </button>
                 <button
-                  className={`trim-play-btn trim-play-full ${isPlaying && playMode === 'full' ? 'playing' : ''}`}
+                  className={`trim-transport-btn trim-btn-full ${isPlaying && playMode === 'full' ? 'active' : ''}`}
                   onClick={() => {
-                    if (isPlaying) { stopPlayback(); }
+                    if (isPlaying && playMode === 'full') { stopPlayback(); }
                     else { setPlayMode('full'); playAudio(0, duration); }
                   }}
+                  title="Play full audio"
                 >
-                  {isPlaying && playMode === 'full' ? 'Stop' : 'Play Full'}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                    <polygon points="5 3 19 12 5 21 5 3"/>
+                  </svg>
+                  Full
                 </button>
               </div>
 
-              <div className="trim-info">
-                <span className="trim-info-original">Original: {formatTime(duration)}</span>
-                <span className="trim-info-arrow">→</span>
-                <span className="trim-info-trimmed">Trimmed: {formatTime(trimmedDuration)}</span>
+              <div className="trim-transport-info">
+                <span className="trim-savings-badge">
+                  {savingsPercent > 0 ? `−${savingsPercent}%` : 'Full length'}
+                </span>
+                <span className="trim-transport-duration">
+                  {formatTimeShort(trimmedDuration)} <span className="trim-of">of</span> {formatTimeShort(duration)}
+                </span>
               </div>
             </div>
 
+            {/* Keyboard hint */}
+            <div className="trim-keyboard-hint">
+              <kbd>Space</kbd> Play/Pause &nbsp; <kbd>Esc</kbd> Cancel &nbsp; Drag handles to set trim points
+            </div>
+
+            {/* Actions */}
             <div className="trim-actions">
-              <button className="btn-secondary" onClick={() => { stopPlayback(); onCancel(); }}>
+              <button className="trim-cancel-btn" onClick={() => { stopPlayback(); onCancel(); }}>
                 Cancel
               </button>
-              <button className="btn-primary trim-upload-btn" onClick={handleTrimAndUpload}>
+              <button className="trim-upload-btn" onClick={handleTrimAndUpload}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
+                  <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                  <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/>
+                  <line x1="8.12" y1="8.12" x2="12" y2="12"/>
                 </svg>
                 Trim & Upload
               </button>

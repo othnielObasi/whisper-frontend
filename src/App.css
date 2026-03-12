@@ -1285,60 +1285,95 @@ button:disabled {
 }
 
 /* ============================================
-   Trim Modal
+   Trim Modal — Professional Audio Editor
    ============================================ */
 
 .trim-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(44, 36, 22, 0.5);
-  backdrop-filter: blur(4px);
+  background: rgba(20, 16, 10, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 24px;
+  padding: 20px;
 }
 
 .trim-modal {
   background: #FFFFFF;
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(44, 36, 22, 0.25);
-  max-width: 800px;
+  border-radius: 20px;
+  box-shadow:
+    0 24px 80px rgba(44, 36, 22, 0.2),
+    0 0 0 1px rgba(44, 36, 22, 0.06);
+  max-width: 840px;
   width: 100%;
-  max-height: 90vh;
+  max-height: 92vh;
   overflow-y: auto;
-  padding: 32px;
-  animation: trimModalIn 0.25s ease-out;
+  padding: 28px 32px 24px;
+  animation: trimFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes trimModalIn {
-  from { opacity: 0; transform: scale(0.96) translateY(12px); }
+@keyframes trimFadeIn {
+  from { opacity: 0; transform: scale(0.97) translateY(16px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+/* Header */
 .trim-modal-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 20px;
+}
+
+.trim-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.trim-icon {
+  width: 44px;
+  height: 44px;
+  background: linear-gradient(135deg, #F5EDE3, #E8D4BC);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8B5A2B;
+  flex-shrink: 0;
 }
 
 .trim-modal-header h2 {
   font-family: 'Source Serif 4', Georgia, serif;
-  font-size: 1.5rem;
+  font-size: 1.375rem;
   font-weight: 600;
   color: #2C2416;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.trim-filename {
+  font-size: 0.8125rem;
+  color: #9C8B78;
+  margin: 2px 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 400px;
 }
 
 .trim-close-btn {
   background: none;
   border: none;
-  color: #8C7B6B;
+  color: #9C8B78;
   cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-  transition: background 0.15s, color 0.15s;
+  padding: 6px;
+  border-radius: 8px;
+  transition: all 0.15s;
+  flex-shrink: 0;
 }
 
 .trim-close-btn:hover {
@@ -1346,90 +1381,137 @@ button:disabled {
   color: #2C2416;
 }
 
-.trim-filename {
-  font-size: 0.875rem;
-  color: #8C7B6B;
-  margin-bottom: 20px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* Loading state */
 .trim-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  padding: 48px 0;
+  padding: 56px 0;
   color: #8C7B6B;
+  font-size: 0.9375rem;
 }
 
-.trim-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid #E5DFD6;
-  border-top-color: #8B5A2B;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+.trim-load-ring {
+  position: relative;
+  width: 64px;
+  height: 64px;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.trim-load-ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
 }
 
-/* Time display bar */
-.trim-time-display {
+.trim-load-track {
+  fill: none;
+  stroke: #E5DFD6;
+  stroke-width: 3;
+}
+
+.trim-load-fill {
+  fill: none;
+  stroke: #8B5A2B;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 126;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+.trim-load-percent {
+  position: absolute;
+  inset: 0;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  background: #F5F2ED;
-  border-radius: 10px;
-  padding: 12px 20px;
-  margin-bottom: 16px;
-}
-
-.trim-time-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.trim-time-duration {
-  background: rgba(139, 90, 43, 0.1);
-  padding: 6px 16px;
-  border-radius: 8px;
-}
-
-.trim-time-label {
-  font-size: 0.6875rem;
-  color: #8C7B6B;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  justify-content: center;
+  font-size: 0.75rem;
   font-weight: 600;
-}
-
-.trim-time-value {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: #2C2416;
-  font-variant-numeric: tabular-nums;
-}
-
-.trim-time-duration .trim-time-value {
   color: #8B5A2B;
 }
 
-/* Waveform container */
+/* Time bar */
+.trim-time-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.trim-time-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #F8F5F0;
+  border: 1px solid #ECE6DD;
+}
+
+.trim-time-card > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.trim-time-start,
+.trim-time-end {
+  flex: 1;
+}
+
+.trim-time-selection {
+  flex: 0 0 auto;
+  background: linear-gradient(135deg, rgba(139, 90, 43, 0.08), rgba(139, 90, 43, 0.04));
+  border-color: rgba(139, 90, 43, 0.15);
+}
+
+.trim-time-selection svg {
+  color: #8B5A2B;
+  flex-shrink: 0;
+}
+
+.trim-time-icon {
+  font-size: 0.625rem;
+  color: #B09A84;
+  flex-shrink: 0;
+}
+
+.trim-time-label {
+  font-size: 0.625rem;
+  color: #9C8B78;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.trim-time-value {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: #2C2416;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+  line-height: 1.3;
+}
+
+.trim-time-selection .trim-time-value {
+  color: #8B5A2B;
+}
+
+/* Waveform wrap */
+.trim-waveform-wrap {
+  margin-bottom: 16px;
+}
+
 .trim-waveform-container {
   position: relative;
-  height: 140px;
-  border-radius: 10px;
+  height: 160px;
+  border-radius: 12px;
   overflow: hidden;
   border: 1px solid #E5DFD6;
-  cursor: pointer;
+  cursor: crosshair;
   user-select: none;
   touch-action: none;
+  background: #F8F5F0;
 }
 
 .trim-waveform-canvas {
@@ -1438,18 +1520,16 @@ button:disabled {
   display: block;
 }
 
-/* Trim handles */
+/* Handles */
 .trim-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 14px;
+  width: 20px;
   cursor: ew-resize;
   z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   touch-action: none;
+  transition: opacity 0.15s;
 }
 
 .trim-handle-start {
@@ -1460,41 +1540,78 @@ button:disabled {
   transform: translateX(0);
 }
 
-.trim-handle-bar {
-  width: 4px;
-  height: 100%;
+.trim-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
   background: #6B4423;
   border-radius: 2px;
-  transition: background 0.15s;
+  transition: all 0.2s;
 }
 
-.trim-handle:hover .trim-handle-bar,
-.trim-handle:active .trim-handle-bar {
+.trim-handle-start::before {
+  right: 0;
+}
+
+.trim-handle-end::before {
+  left: 0;
+}
+
+.trim-handle:hover::before,
+.trim-handle.dragging::before {
+  width: 4px;
   background: #8B5A2B;
-  width: 5px;
+  box-shadow: 0 0 8px rgba(139, 90, 43, 0.35);
 }
 
-.trim-handle-flag {
+/* Grip dots */
+.trim-handle-grip {
   position: absolute;
-  top: 4px;
-  font-size: 8px;
-  color: white;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 5px;
   background: #6B4423;
-  padding: 2px 4px;
-  border-radius: 3px;
-  pointer-events: none;
-  line-height: 1;
+  border-radius: 4px;
+  transition: all 0.2s;
 }
 
-.trim-handle-start .trim-handle-flag {
-  right: 2px;
+.trim-handle-start .trim-handle-grip {
+  right: -1px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
-.trim-handle-end .trim-handle-flag {
-  left: 2px;
+.trim-handle-end .trim-handle-grip {
+  left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
-/* Draggable region overlay */
+.trim-handle-grip span {
+  display: block;
+  width: 3px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+}
+
+.trim-handle:hover .trim-handle-grip,
+.trim-handle.dragging .trim-handle-grip {
+  background: #8B5A2B;
+  box-shadow: 0 2px 8px rgba(139, 90, 43, 0.3);
+}
+
+.trim-handle:hover .trim-handle-grip span,
+.trim-handle.dragging .trim-handle-grip span {
+  background: white;
+}
+
+/* Region overlay */
 .trim-region {
   position: absolute;
   top: 0;
@@ -1502,6 +1619,8 @@ button:disabled {
   cursor: grab;
   z-index: 5;
   touch-action: none;
+  border-top: 2px solid rgba(139, 90, 43, 0.15);
+  border-bottom: 2px solid rgba(139, 90, 43, 0.15);
 }
 
 .trim-region:active {
@@ -1510,96 +1629,197 @@ button:disabled {
 
 /* Time axis */
 .trim-time-axis {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 0 16px;
-  font-size: 0.6875rem;
-  color: #8C7B6B;
+  position: relative;
+  height: 18px;
+  margin-top: 4px;
+}
+
+.trim-time-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 0.625rem;
+  color: #B09A84;
   font-variant-numeric: tabular-nums;
 }
 
-/* Playback controls */
-.trim-controls {
+.trim-time-axis span:first-child {
+  transform: translateX(0);
+}
+
+.trim-time-axis span:last-child {
+  transform: translateX(-100%);
+}
+
+/* Transport controls */
+.trim-transport {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
-  gap: 16px;
+  padding: 12px 16px;
+  background: #F8F5F0;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.trim-play-group {
-  display: flex;
-  gap: 8px;
-}
-
-.trim-play-btn {
+.trim-transport-left {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px;
-  background: #F5F2ED;
-  color: #2C2416;
-  border: 1px solid #E5DFD6;
+}
+
+.trim-transport-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: none;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
+  font-family: inherit;
 }
 
-.trim-play-btn svg {
-  width: 16px;
-  height: 16px;
+.trim-btn-play {
+  width: 44px;
+  height: 44px;
+  background: #8B5A2B;
+  color: white;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(139, 90, 43, 0.3);
 }
 
-.trim-play-btn:hover {
+.trim-btn-play:hover {
+  background: #6B4423;
+  box-shadow: 0 4px 12px rgba(139, 90, 43, 0.35);
+  transform: scale(1.05);
+}
+
+.trim-btn-play.active {
+  background: #E74C3C;
+  box-shadow: 0 2px 8px rgba(231, 76, 60, 0.3);
+}
+
+.trim-btn-full {
+  padding: 8px 14px;
+  background: transparent;
+  color: #6B4423;
+  border: 1px solid #E5DFD6;
+}
+
+.trim-btn-full svg {
+  width: 14px;
+  height: 14px;
+}
+
+.trim-btn-full:hover {
   background: #E5DFD6;
 }
 
-.trim-play-btn.playing {
-  background: #8B5A2B;
+.trim-btn-full.active {
+  background: #E74C3C;
   color: white;
-  border-color: #8B5A2B;
+  border-color: #E74C3C;
 }
 
-.trim-play-full {
-  background: transparent;
-  border-color: #E5DFD6;
-}
-
-.trim-info {
+.trim-transport-info {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.875rem;
-  color: #8C7B6B;
+  gap: 10px;
 }
 
-.trim-info-arrow {
-  color: #8B5A2B;
-}
-
-.trim-info-trimmed {
+.trim-savings-badge {
+  font-size: 0.75rem;
   font-weight: 600;
   color: #8B5A2B;
+  background: rgba(139, 90, 43, 0.1);
+  padding: 3px 10px;
+  border-radius: 20px;
 }
 
-/* Action buttons */
+.trim-transport-duration {
+  font-size: 0.875rem;
+  color: #6B5943;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.trim-of {
+  color: #B09A84;
+  font-weight: 400;
+}
+
+/* Keyboard hint */
+.trim-keyboard-hint {
+  text-align: center;
+  font-size: 0.6875rem;
+  color: #B09A84;
+  margin-bottom: 16px;
+}
+
+.trim-keyboard-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #F5F2ED;
+  border: 1px solid #E5DFD6;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: #6B5943;
+  margin: 0 2px;
+}
+
+/* Actions */
 .trim-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
   padding-top: 16px;
-  border-top: 1px solid #E5DFD6;
+  border-top: 1px solid #ECE6DD;
+}
+
+.trim-cancel-btn {
+  padding: 10px 20px;
+  background: transparent;
+  color: #6B5943;
+  border: 1px solid #E5DFD6;
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.trim-cancel-btn:hover {
+  background: #F5F2ED;
 }
 
 .trim-upload-btn {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 24px !important;
-  font-size: 1rem !important;
+  padding: 10px 24px;
+  background: linear-gradient(135deg, #8B5A2B, #6B4423);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(107, 68, 35, 0.25);
+}
+
+.trim-upload-btn:hover {
+  background: linear-gradient(135deg, #6B4423, #553618);
+  box-shadow: 0 4px 16px rgba(107, 68, 35, 0.3);
+  transform: translateY(-1px);
 }
 
 .trim-upload-btn svg {
@@ -1608,36 +1828,52 @@ button:disabled {
 }
 
 /* Responsive */
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .trim-modal {
     padding: 20px;
-    border-radius: 12px;
+    border-radius: 16px;
+  }
+
+  .trim-modal-header h2 {
+    font-size: 1.125rem;
+  }
+
+  .trim-icon {
+    width: 36px;
+    height: 36px;
   }
 
   .trim-waveform-container {
-    height: 100px;
+    height: 120px;
   }
 
-  .trim-controls {
+  .trim-time-bar {
     flex-direction: column;
-    align-items: stretch;
+    gap: 6px;
   }
 
-  .trim-play-group {
-    justify-content: center;
+  .trim-time-card {
+    padding: 8px 12px;
   }
 
-  .trim-info {
-    justify-content: center;
+  .trim-transport {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .trim-keyboard-hint {
+    display: none;
   }
 
   .trim-actions {
-    flex-direction: column;
+    flex-direction: column-reverse;
   }
 
-  .trim-actions .btn-primary,
-  .trim-actions .btn-secondary {
+  .trim-cancel-btn,
+  .trim-upload-btn {
     width: 100%;
     justify-content: center;
+    text-align: center;
   }
 }
