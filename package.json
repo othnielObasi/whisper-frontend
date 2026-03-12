@@ -12,8 +12,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "@clerk/clerk-react": "^5.2.0",
-    "@azure/storage-blob": "^12.17.0",
-    "@azure/storage-queue": "^12.16.0"
+    "@azure/storage-blob": "^12.17.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",

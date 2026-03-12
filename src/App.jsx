@@ -12,6 +12,467 @@ import './App.css';
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 // ============================================
+// WAV Encoding Utility
+// ============================================
+function encodeWAV(audioBuffer, startSample, endSample) {
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const length = endSample - startSample;
+  const buffer = new ArrayBuffer(44 + length * numChannels * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + length * numChannels * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * 2, true);
+  view.setUint16(32, numChannels * 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, length * numChannels * 2, true);
+
+  const channels = [];
+  for (let ch = 0; ch < numChannels; ch++) {
+    channels.push(audioBuffer.getChannelData(ch));
+  }
+
+  let offset = 44;
+  for (let i = startSample; i < endSample; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, channels[ch][i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+// ============================================
+// Trim Modal Component
+// ============================================
+function TrimModal({ file, onTrimComplete, onCancel }) {
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const audioRef = useRef(null);
+  const audioBufferRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const sourceNodeRef = useRef(null);
+  const animFrameRef = useRef(null);
+
+  const [loading, setLoading] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [dragging, setDragging] = useState(null); // 'start' | 'end' | 'region' | null
+  const [dragOrigin, setDragOrigin] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [playMode, setPlayMode] = useState('selection'); // 'selection' | 'full'
+  const playStartRef = useRef(0);
+  const playOffsetRef = useRef(0);
+
+  // Decode audio file
+  useEffect(() => {
+    let cancelled = false;
+    const decode = async () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = ctx;
+        const arrayBuffer = await file.arrayBuffer();
+        const decoded = await ctx.decodeAudioData(arrayBuffer);
+        if (cancelled) return;
+        audioBufferRef.current = decoded;
+        setDuration(decoded.duration);
+        setTrimEnd(decoded.duration);
+        setLoading(false);
+      } catch (e) {
+        console.error('Failed to decode audio:', e);
+        alert('Could not decode this audio file. Please try another format.');
+        onCancel();
+      }
+    };
+    decode();
+    return () => { cancelled = true; };
+  }, [file, onCancel]);
+
+  // Draw waveform
+  useEffect(() => {
+    if (loading || !audioBufferRef.current || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const buffer = audioBufferRef.current;
+    const data = buffer.getChannelData(0);
+    const dpr = window.devicePixelRatio || 1;
+
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    const w = rect.width;
+    const h = rect.height;
+    const mid = h / 2;
+    const samplesPerPixel = Math.floor(data.length / w);
+
+    // Background
+    ctx.fillStyle = '#FAF8F5';
+    ctx.fillRect(0, 0, w, h);
+
+    // Dimmed regions (outside trim)
+    const startX = (trimStart / duration) * w;
+    const endX = (trimEnd / duration) * w;
+
+    // Draw full waveform dimmed
+    ctx.fillStyle = '#D4C9BB';
+    for (let x = 0; x < w; x++) {
+      let min = 1, max = -1;
+      const start = x * samplesPerPixel;
+      for (let j = 0; j < samplesPerPixel; j += 4) {
+        const val = data[start + j] || 0;
+        if (val < min) min = val;
+        if (val > max) max = val;
+      }
+      const top = (1 - max) * mid;
+      const bottom = (1 - min) * mid;
+      ctx.fillRect(x, top, 1, bottom - top);
+    }
+
+    // Draw selected region highlighted
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(startX, 0, endX - startX, h);
+    ctx.clip();
+    ctx.fillStyle = '#FAF8F5';
+    ctx.fillRect(startX, 0, endX - startX, h);
+    ctx.fillStyle = '#8B5A2B';
+    for (let x = Math.floor(startX); x < Math.ceil(endX); x++) {
+      let min = 1, max = -1;
+      const start = x * samplesPerPixel;
+      for (let j = 0; j < samplesPerPixel; j += 4) {
+        const val = data[start + j] || 0;
+        if (val < min) min = val;
+        if (val > max) max = val;
+      }
+      const top = (1 - max) * mid;
+      const bottom = (1 - min) * mid;
+      ctx.fillRect(x, top, 1, Math.max(1, bottom - top));
+    }
+    ctx.restore();
+
+    // Dim overlay outside selection
+    ctx.fillStyle = 'rgba(245, 242, 237, 0.6)';
+    ctx.fillRect(0, 0, startX, h);
+    ctx.fillRect(endX, 0, w - endX, h);
+
+    // Playhead
+    if (playbackTime > 0) {
+      const playX = (playbackTime / duration) * w;
+      ctx.strokeStyle = '#E74C3C';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(playX, 0);
+      ctx.lineTo(playX, h);
+      ctx.stroke();
+    }
+
+    // Handle lines
+    ctx.strokeStyle = '#6B4423';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(startX, 0);
+    ctx.lineTo(startX, h);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(endX, 0);
+    ctx.lineTo(endX, h);
+    ctx.stroke();
+
+  }, [loading, trimStart, trimEnd, duration, playbackTime]);
+
+  // Playback animation loop
+  useEffect(() => {
+    if (!isPlaying) {
+      cancelAnimationFrame(animFrameRef.current);
+      return;
+    }
+    const tick = () => {
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+      const elapsed = ctx.currentTime - playStartRef.current;
+      const current = playOffsetRef.current + elapsed;
+      const limit = playMode === 'selection' ? trimEnd : duration;
+      if (current >= limit) {
+        stopPlayback();
+        setPlaybackTime(0);
+        return;
+      }
+      setPlaybackTime(current);
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+    animFrameRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animFrameRef.current);
+  }, [isPlaying, trimEnd, duration, playMode]);
+
+  const stopPlayback = useCallback(() => {
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop(); } catch {}
+      sourceNodeRef.current = null;
+    }
+    setIsPlaying(false);
+  }, []);
+
+  const playAudio = useCallback((fromTime, toTime) => {
+    stopPlayback();
+    const ctx = audioContextRef.current;
+    const buffer = audioBufferRef.current;
+    if (!ctx || !buffer) return;
+
+    if (ctx.state === 'suspended') ctx.resume();
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.onended = () => {
+      setIsPlaying(false);
+      setPlaybackTime(0);
+    };
+
+    playStartRef.current = ctx.currentTime;
+    playOffsetRef.current = fromTime;
+    source.start(0, fromTime, toTime - fromTime);
+    sourceNodeRef.current = source;
+    setIsPlaying(true);
+    setPlaybackTime(fromTime);
+  }, [stopPlayback]);
+
+  // Mouse/touch handling for handles
+  const getTimeFromX = useCallback((clientX) => {
+    if (!containerRef.current || !duration) return 0;
+    const rect = containerRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return ratio * duration;
+  }, [duration]);
+
+  const handlePointerDown = useCallback((e, type) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragging(type);
+    if (type === 'region') {
+      setDragOrigin({ x: e.clientX, start: trimStart, end: trimEnd });
+    }
+  }, [trimStart, trimEnd]);
+
+  const handlePointerMove = useCallback((e) => {
+    if (!dragging) return;
+    const time = getTimeFromX(e.clientX);
+
+    if (dragging === 'start') {
+      setTrimStart(Math.max(0, Math.min(time, trimEnd - 1)));
+    } else if (dragging === 'end') {
+      setTrimEnd(Math.min(duration, Math.max(time, trimStart + 1)));
+    } else if (dragging === 'region' && dragOrigin) {
+      const dx = e.clientX - dragOrigin.x;
+      const rect = containerRef.current.getBoundingClientRect();
+      const dt = (dx / rect.width) * duration;
+      const regionLen = dragOrigin.end - dragOrigin.start;
+      let newStart = dragOrigin.start + dt;
+      let newEnd = dragOrigin.end + dt;
+      if (newStart < 0) { newStart = 0; newEnd = regionLen; }
+      if (newEnd > duration) { newEnd = duration; newStart = duration - regionLen; }
+      setTrimStart(newStart);
+      setTrimEnd(newEnd);
+    }
+  }, [dragging, trimStart, trimEnd, duration, getTimeFromX, dragOrigin]);
+
+  const handlePointerUp = useCallback(() => {
+    setDragging(null);
+    setDragOrigin(null);
+  }, []);
+
+  useEffect(() => {
+    if (dragging) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      return () => {
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+      };
+    }
+  }, [dragging, handlePointerMove, handlePointerUp]);
+
+  // Click on waveform to seek
+  const handleWaveformClick = useCallback((e) => {
+    if (dragging) return;
+    const time = getTimeFromX(e.clientX);
+    setPlaybackTime(time);
+    if (isPlaying) {
+      const limit = playMode === 'selection' ? trimEnd : duration;
+      playAudio(time, limit);
+    }
+  }, [dragging, getTimeFromX, isPlaying, playMode, trimEnd, duration, playAudio]);
+
+  const handleTrimAndUpload = () => {
+    const buffer = audioBufferRef.current;
+    if (!buffer) return;
+    const startSample = Math.floor(trimStart * buffer.sampleRate);
+    const endSample = Math.floor(trimEnd * buffer.sampleRate);
+    const wavBlob = encodeWAV(buffer, startSample, endSample);
+    const trimmedFile = new File([wavBlob], file.name.replace(/\.[^.]+$/, '_trimmed.wav'), { type: 'audio/wav' });
+    stopPlayback();
+    onTrimComplete(trimmedFile);
+  };
+
+  const formatTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const trimmedDuration = trimEnd - trimStart;
+
+  return (
+    <div className="trim-modal-overlay" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
+      <div className="trim-modal">
+        <div className="trim-modal-header">
+          <h2>Trim Audio</h2>
+          <button className="trim-close-btn" onClick={() => { stopPlayback(); onCancel(); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <p className="trim-filename">{file.name}</p>
+
+        {loading ? (
+          <div className="trim-loading">
+            <div className="trim-spinner" />
+            <p>Decoding audio...</p>
+          </div>
+        ) : (
+          <>
+            <div className="trim-time-display">
+              <div className="trim-time-item">
+                <span className="trim-time-label">Start</span>
+                <span className="trim-time-value">{formatTime(trimStart)}</span>
+              </div>
+              <div className="trim-time-item trim-time-duration">
+                <span className="trim-time-label">Selection</span>
+                <span className="trim-time-value">{formatTime(trimmedDuration)}</span>
+              </div>
+              <div className="trim-time-item">
+                <span className="trim-time-label">End</span>
+                <span className="trim-time-value">{formatTime(trimEnd)}</span>
+              </div>
+            </div>
+
+            <div className="trim-waveform-container" ref={containerRef} onClick={handleWaveformClick}>
+              <canvas ref={canvasRef} className="trim-waveform-canvas" />
+              
+              {/* Start handle */}
+              <div
+                className="trim-handle trim-handle-start"
+                style={{ left: `${(trimStart / duration) * 100}%` }}
+                onPointerDown={(e) => handlePointerDown(e, 'start')}
+              >
+                <div className="trim-handle-bar" />
+                <div className="trim-handle-flag">◀</div>
+              </div>
+
+              {/* Draggable selected region */}
+              <div
+                className="trim-region"
+                style={{
+                  left: `${(trimStart / duration) * 100}%`,
+                  width: `${((trimEnd - trimStart) / duration) * 100}%`
+                }}
+                onPointerDown={(e) => handlePointerDown(e, 'region')}
+              />
+
+              {/* End handle */}
+              <div
+                className="trim-handle trim-handle-end"
+                style={{ left: `${(trimEnd / duration) * 100}%` }}
+                onPointerDown={(e) => handlePointerDown(e, 'end')}
+              >
+                <div className="trim-handle-bar" />
+                <div className="trim-handle-flag">▶</div>
+              </div>
+            </div>
+
+            <div className="trim-time-axis">
+              <span>{formatTime(0)}</span>
+              <span>{formatTime(duration / 4)}</span>
+              <span>{formatTime(duration / 2)}</span>
+              <span>{formatTime((duration * 3) / 4)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+
+            <div className="trim-controls">
+              <div className="trim-play-group">
+                <button
+                  className={`trim-play-btn ${isPlaying && playMode === 'selection' ? 'playing' : ''}`}
+                  onClick={() => {
+                    if (isPlaying) { stopPlayback(); }
+                    else { setPlayMode('selection'); playAudio(trimStart, trimEnd); }
+                  }}
+                >
+                  {isPlaying && playMode === 'selection' ? (
+                    <><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg> Stop</>
+                  ) : (
+                    <><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg> Play Selection</>
+                  )}
+                </button>
+                <button
+                  className={`trim-play-btn trim-play-full ${isPlaying && playMode === 'full' ? 'playing' : ''}`}
+                  onClick={() => {
+                    if (isPlaying) { stopPlayback(); }
+                    else { setPlayMode('full'); playAudio(0, duration); }
+                  }}
+                >
+                  {isPlaying && playMode === 'full' ? 'Stop' : 'Play Full'}
+                </button>
+              </div>
+
+              <div className="trim-info">
+                <span className="trim-info-original">Original: {formatTime(duration)}</span>
+                <span className="trim-info-arrow">→</span>
+                <span className="trim-info-trimmed">Trimmed: {formatTime(trimmedDuration)}</span>
+              </div>
+            </div>
+
+            <div className="trim-actions">
+              <button className="btn-secondary" onClick={() => { stopPlayback(); onCancel(); }}>
+                Cancel
+              </button>
+              <button className="btn-primary trim-upload-btn" onClick={handleTrimAndUpload}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Trim & Upload
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // Upload Panel Component
 // ============================================
 function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
@@ -19,6 +480,8 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
   const [progress, setProgress] = useState(0);
   const [interpreterMode, setInterpreterMode] = useState(false);
   const [englishOnly, setEnglishOnly] = useState(true);
+  const [trimEnabled, setTrimEnabled] = useState(false);
+  const [trimFile, setTrimFile] = useState(null);
   const fileInputRef = useRef(null);
 
   const handleDrag = (e) => {
@@ -48,7 +511,11 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
       });
       
       if (!tokenRes.ok) throw new Error('Failed to get upload URL');
-      const { uploadUrl, jobId, blobName } = await tokenRes.json();
+        if (!tokenRes.headers.get('content-type')?.includes('application/json')) {
+          const txt = await tokenRes.text();
+          throw new Error('Bad upload URL response: ' + txt);
+        }
+        const { uploadUrl, jobId, blobName } = await tokenRes.json();
 
       const xhr = new XMLHttpRequest();
       xhr.upload.addEventListener('progress', (e) => {
@@ -58,7 +525,7 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
       });
 
       xhr.onload = async () => {
-        if (xhr.status === 201) {
+          if (xhr.status === 201) {
           await fetch(`${API_BASE}/upload-complete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -66,7 +533,9 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
           });
           onUploadComplete(jobId, file.name);
         } else {
-          alert('Upload failed: ' + xhr.statusText);
+            const respText = xhr.responseText || xhr.statusText;
+            console.error('Upload failed', xhr.status, respText);
+            alert('Upload failed: ' + xhr.status + ' - ' + respText);
         }
         setIsUploading(false);
         setProgress(0);
@@ -96,13 +565,23 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      uploadFile(e.dataTransfer.files[0]);
+      const f = e.dataTransfer.files[0];
+      if (trimEnabled) {
+        setTrimFile(f);
+      } else {
+        uploadFile(f);
+      }
     }
   };
 
   const handleFileSelect = (e) => {
     if (e.target.files && e.target.files[0]) {
-      uploadFile(e.target.files[0]);
+      const f = e.target.files[0];
+      if (trimEnabled) {
+        setTrimFile(f);
+      } else {
+        uploadFile(f);
+      }
     }
   };
 
@@ -151,6 +630,16 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
         <label className="checkbox-label">
           <input
             type="checkbox"
+            checked={trimEnabled}
+            onChange={(e) => setTrimEnabled(e.target.checked)}
+            disabled={isUploading}
+          />
+          Trim audio before upload
+        </label>
+
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
             checked={interpreterMode}
             onChange={(e) => setInterpreterMode(e.target.checked)}
             disabled={isUploading}
@@ -183,6 +672,17 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
           </div>
         )}
       </div>
+
+      {trimFile && (
+        <TrimModal
+          file={trimFile}
+          onTrimComplete={(trimmedFile) => {
+            setTrimFile(null);
+            uploadFile(trimmedFile);
+          }}
+          onCancel={() => setTrimFile(null)}
+        />
+      )}
     </div>
   );
 }
@@ -190,7 +690,7 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
 // ============================================
 // Jobs History Table Component
 // ============================================
-function JobsHistory({ jobs, onSelectJob, currentJobId }) {
+function JobsHistory({ jobs, onSelectJob, onDeleteJob, currentJobId }) {
   const formatDuration = (seconds) => {
     if (!seconds) return '-';
     const mins = Math.floor(seconds / 60);
@@ -254,12 +754,18 @@ function JobsHistory({ jobs, onSelectJob, currentJobId }) {
                 <td>{formatDuration(job.audioDuration)}</td>
                 <td>{formatDuration(job.processingTime)}</td>
                 <td>{formatDate(job.createdAt)}</td>
-                <td>
+                <td className="job-actions">
                   {job.status === 'completed' && (
                     <button className="btn-view" onClick={() => onSelectJob(job)}>
                       View
                     </button>
                   )}
+                  <button className="btn-delete" onClick={() => onDeleteJob(job.jobId)} title="Delete job">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                  </button>
                 </td>
               </tr>
             ))}
@@ -271,13 +777,30 @@ function JobsHistory({ jobs, onSelectJob, currentJobId }) {
 }
 
 // ============================================
-// Status Panel Component
+// Status Panel Component (Animated Processing Page)
 // ============================================
-function StatusPanel({ jobId, onTranscriptReady, onStatusUpdate }) {
+const PROCESSING_STEPS = [
+  { key: 'uploaded', label: 'File uploaded', icon: '📤' },
+  { key: 'queued', label: 'Queued for processing', icon: '📋' },
+  { key: 'processing', label: 'AI transcribing audio', icon: '🧠' },
+  { key: 'completed', label: 'Transcription complete', icon: '✅' },
+];
+
+function getStepIndex(status) {
+  if (status === 'completed') return 3;
+  if (status === 'processing') return 2;
+  if (status === 'queued') return 1;
+  return 0;
+}
+
+function StatusPanel({ jobId, fileName, onTranscriptReady, onStatusUpdate }) {
   const [statusDetails, setStatusDetails] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [dots, setDots] = useState('');
+  const [pollErrors, setPollErrors] = useState(0);
   const pollInterval = useRef(null);
   const timerInterval = useRef(null);
+  const dotsInterval = useRef(null);
   const startTime = useRef(Date.now());
 
   useEffect(() => {
@@ -288,23 +811,35 @@ function StatusPanel({ jobId, onTranscriptReady, onStatusUpdate }) {
       setElapsedTime(Math.floor((Date.now() - startTime.current) / 1000));
     }, 1000);
 
+    dotsInterval.current = setInterval(() => {
+      setDots(prev => prev.length >= 3 ? '' : prev + '.');
+    }, 500);
+
     const checkStatus = async () => {
       try {
         const response = await fetch(`${API_BASE}/status/${jobId}`);
+        if (!response.ok) {
+          setPollErrors(prev => prev + 1);
+          return;
+        }
         const data = await response.json();
+        setPollErrors(0);
         setStatusDetails(data);
         onStatusUpdate?.(data);
 
         if (data.status === 'completed') {
           clearInterval(pollInterval.current);
           clearInterval(timerInterval.current);
+          clearInterval(dotsInterval.current);
           onTranscriptReady(data);
         } else if (data.status === 'failed') {
           clearInterval(pollInterval.current);
           clearInterval(timerInterval.current);
+          clearInterval(dotsInterval.current);
         }
       } catch (error) {
         console.error('Status check error:', error);
+        setPollErrors(prev => prev + 1);
       }
     };
 
@@ -314,23 +849,15 @@ function StatusPanel({ jobId, onTranscriptReady, onStatusUpdate }) {
     return () => {
       clearInterval(pollInterval.current);
       clearInterval(timerInterval.current);
+      clearInterval(dotsInterval.current);
     };
   }, [jobId, onTranscriptReady, onStatusUpdate]);
 
   if (!jobId) return null;
 
-  const getStatusIcon = () => {
-    const isSpinning = statusDetails?.status === 'processing' || statusDetails?.status === 'queued';
-    return (
-      <span className={isSpinning ? 'spinning' : ''}>
-        {statusDetails?.status === 'queued' && '⏳'}
-        {statusDetails?.status === 'processing' && '⚙️'}
-        {statusDetails?.status === 'completed' && '✅'}
-        {statusDetails?.status === 'failed' && '❌'}
-        {!statusDetails?.status && '📋'}
-      </span>
-    );
-  };
+  const currentStatus = statusDetails?.status || 'queued';
+  const activeStep = getStepIndex(currentStatus);
+  const isActive = currentStatus === 'processing' || currentStatus === 'queued';
 
   const formatElapsed = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -338,29 +865,103 @@ function StatusPanel({ jobId, onTranscriptReady, onStatusUpdate }) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Estimate: ~5 min per hour of audio as a rough guess, cap at 10 min display
+  const estimatedMin = 8;
+  const estimatedMax = 12;
+  const progressPercent = isActive
+    ? Math.min(95, Math.round((elapsedTime / (estimatedMin * 60)) * 100))
+    : currentStatus === 'completed' ? 100 : 0;
+
   return (
-    <div className="status-panel">
-      <h3>Processing Status</h3>
-      <div className="status-card">
-        <div className="status-icon">{getStatusIcon()}</div>
-        <div className="status-info">
-          <span className="status-label">{statusDetails?.status || 'Checking...'}</span>
-          <span className="status-file">{jobId}</span>
-          {(statusDetails?.status === 'processing' || statusDetails?.status === 'queued') && (
-            <span className="status-time">Elapsed: {formatElapsed(elapsedTime)}</span>
-          )}
-          {statusDetails?.processingTime && (
-            <span className="status-time completed">
-              ✓ Completed in {Math.floor(statusDetails.processingTime / 60)}m {Math.floor(statusDetails.processingTime % 60)}s
-            </span>
-          )}
+    <div className="status-panel-v2">
+      {/* Pulsing ring animation */}
+      <div className="status-ring-container">
+        <svg className="status-ring" viewBox="0 0 120 120">
+          <circle className="ring-bg" cx="60" cy="60" r="52" />
+          <circle
+            className={`ring-progress ${isActive ? 'ring-animated' : ''}`}
+            cx="60" cy="60" r="52"
+            style={{ strokeDashoffset: 327 - (327 * progressPercent / 100) }}
+          />
+        </svg>
+        <div className="status-ring-inner">
+          <span className="status-ring-percent">{progressPercent}%</span>
+          <span className="status-ring-elapsed">{formatElapsed(elapsedTime)}</span>
         </div>
       </div>
-      {(statusDetails?.status === 'processing' || statusDetails?.status === 'queued') && (
-        <p className="status-hint">
-          Processing a 2-hour sermon typically takes 8-10 minutes...
-        </p>
+
+      {/* Title & subtitle */}
+      <h3 className="status-v2-title">
+        {currentStatus === 'completed' ? 'Transcription Complete!' :
+         currentStatus === 'failed' ? 'Processing Failed' :
+         `Transcribing${dots}`}
+      </h3>
+      {fileName && <p className="status-v2-filename">{fileName}</p>}
+
+      {/* Step tracker */}
+      <div className="status-steps">
+        {PROCESSING_STEPS.map((step, idx) => {
+          const isDone = idx < activeStep;
+          const isCurrent = idx === activeStep;
+          return (
+            <div key={step.key} className={`status-step ${isDone ? 'done' : ''} ${isCurrent ? 'current' : ''}`}>
+              <div className="step-icon-row">
+                <div className={`step-dot ${isDone ? 'done' : ''} ${isCurrent ? 'current' : ''}`}>
+                  {isDone ? '✓' : step.icon}
+                </div>
+                {idx < PROCESSING_STEPS.length - 1 && (
+                  <div className={`step-line ${isDone ? 'done' : ''}`} />
+                )}
+              </div>
+              <span className="step-label">{step.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Live info bar */}
+      {isActive && (
+        <div className="status-live-bar">
+          <div className="live-dot" />
+          <span>Estimated: {estimatedMin}–{estimatedMax} minutes for a 2-hour sermon</span>
+        </div>
       )}
+
+      {/* Fun tips that rotate */}
+      {isActive && <StatusTips />}
+
+      {currentStatus === 'failed' && (
+        <p className="status-error-msg">Something went wrong. Please try uploading again.</p>
+      )}
+
+      {pollErrors >= 3 && (
+        <p className="status-error-msg">Having trouble checking status. Still trying...</p>
+      )}
+    </div>
+  );
+}
+
+function StatusTips() {
+  const tips = [
+    '🎵 WhisperX AI is analyzing your audio waveforms...',
+    '🔤 Identifying speakers and segmenting dialogue...',
+    '⚡ Generating timestamps for each segment...',
+    '📝 Building paragraph structure from speech patterns...',
+    '🌍 Detecting language and optimizing accuracy...',
+    '🎯 Fine-tuning punctuation and formatting...',
+  ];
+  const [tipIdx, setTipIdx] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTipIdx(prev => (prev + 1) % tips.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="status-tips">
+      <p className="status-tip-text" key={tipIdx}>{tips[tipIdx]}</p>
     </div>
   );
 }
@@ -368,7 +969,7 @@ function StatusPanel({ jobId, onTranscriptReady, onStatusUpdate }) {
 // ============================================
 // Audio Player Component
 // ============================================
-const AudioPlayer = React.forwardRef(({ audioUrl, currentTime, onTimeUpdate, onSeek, isPlaying, setIsPlaying }, ref) => {
+const AudioPlayer = React.forwardRef(({ audioUrl, currentTime, onTimeUpdate, onSeek, isPlaying, setIsPlaying, onDurationLoaded }, ref) => {
   const audioRef = useRef(null);
   const [duration, setDuration] = useState(0);
 
@@ -435,7 +1036,11 @@ const AudioPlayer = React.forwardRef(({ audioUrl, currentTime, onTimeUpdate, onS
         ref={audioRef}
         src={audioUrl}
         onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+        onLoadedMetadata={() => {
+          const d = audioRef.current?.duration || 0;
+          setDuration(d);
+          if (d > 0 && onDurationLoaded) onDurationLoaded(d);
+        }}
         onEnded={() => setIsPlaying(false)}
       />
       
@@ -483,7 +1088,7 @@ const AudioPlayer = React.forwardRef(({ audioUrl, currentTime, onTimeUpdate, onS
 // ============================================
 // Transcript Segment Component
 // ============================================
-function TranscriptSegment({ segment, isActive, isPlaying, onClick, onDoubleClick, isEditing, editText, setEditText, onSave, onCancel }) {
+function TranscriptSegment({ segment, isActive, isPlaying, onClick, onDoubleClick, isEditing, editText, setEditText, onSave, onCancel, showTimestamps }) {
   if (isEditing) {
     return (
       <div className="segment-edit-container">
@@ -512,10 +1117,12 @@ function TranscriptSegment({ segment, isActive, isPlaying, onClick, onDoubleClic
       onDoubleClick={onDoubleClick}
       title="Click to play • Double-click to edit"
     >
-      <span className="timestamp">
-        {isActive && isPlaying && '▶ '}
-        {segment.ts}
-      </span>
+      {showTimestamps && (
+        <span className="timestamp">
+          {isActive && isPlaying && '▶ '}
+          {segment.ts}
+        </span>
+      )}
       <span className="text">{segment.text}</span>
       {' '}
     </span>
@@ -525,13 +1132,14 @@ function TranscriptSegment({ segment, isActive, isPlaying, onClick, onDoubleClic
 // ============================================
 // Transcript Editor Component
 // ============================================
-function TranscriptEditor({ transcript, audioUrl, onSave }) {
+function TranscriptEditor({ transcript, audioUrl, onSave, onAudioDurationLoaded }) {
   const [paragraphs, setParagraphs] = useState([]);
   const [currentTime, setCurrentTime] = useState(0);
   const [editingSegment, setEditingSegment] = useState(null);
   const [editText, setEditText] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showTimestamps, setShowTimestamps] = useState(true);
   const transcriptRef = useRef(null);
   const audioPlayerRef = useRef(null);
 
@@ -615,6 +1223,17 @@ function TranscriptEditor({ transcript, audioUrl, onSave }) {
           <span className="hint-separator">•</span>
           <span className="hint-badge">Double-click</span> to edit
         </div>
+        <label className="timestamp-toggle">
+          <span className="timestamp-toggle-label">Timestamps</span>
+          <button
+            className={`toggle-switch ${showTimestamps ? 'on' : ''}`}
+            onClick={() => setShowTimestamps(prev => !prev)}
+            role="switch"
+            aria-checked={showTimestamps}
+          >
+            <span className="toggle-knob" />
+          </button>
+        </label>
         {hasChanges && (
           <button className="btn-primary" onClick={handleSaveAll}>
             Save Changes
@@ -631,6 +1250,7 @@ function TranscriptEditor({ transcript, audioUrl, onSave }) {
           onSeek={setCurrentTime}
           isPlaying={isPlaying}
           setIsPlaying={setIsPlaying}
+          onDurationLoaded={onAudioDurationLoaded}
         />
       )}
 
@@ -650,9 +1270,10 @@ function TranscriptEditor({ transcript, audioUrl, onSave }) {
                 onDoubleClick={() => handleSegmentDoubleClick(pIdx, sIdx, seg)}
                 onSave={handleSegmentSave}
                 onCancel={handleSegmentCancel}
+                showTimestamps={showTimestamps}
               />
             ))}
-            <span className="paragraph-end-time">{para.end_ts}</span>
+            {showTimestamps && <span className="paragraph-end-time">{para.end_ts}</span>}
           </div>
         ))}
       </div>
@@ -880,6 +1501,7 @@ function App() {
   const [currentJobId, setCurrentJobId] = useState(null);
   const [transcript, setTranscript] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
+  const [currentFileName, setCurrentFileName] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [view, setView] = useState('upload');
   const [jobs, setJobs] = useState([]);
@@ -892,7 +1514,32 @@ function App() {
     const savedJobs = localStorage.getItem(storageKey);
     if (savedJobs) {
       try {
-        setJobs(JSON.parse(savedJobs));
+        const parsed = JSON.parse(savedJobs);
+        setJobs(parsed);
+
+        // Backfill missing audioDuration/processingTime for completed jobs
+        parsed.forEach(async (job) => {
+          if (job.status === 'completed' && (!job.audioDuration || !job.processingTime)) {
+            try {
+              const res = await fetch(`${API_BASE}/status/${job.jobId}`);
+              const data = await res.json();
+              if (data.status === 'completed') {
+                setJobs(prev => prev.map(j =>
+                  j.jobId === job.jobId
+                    ? {
+                        ...j,
+                        status: 'completed',
+                        audioDuration: j.audioDuration || data.audioDuration || null,
+                        processingTime: j.processingTime || data.processingTime || null,
+                      }
+                    : j
+                ));
+              }
+            } catch (e) {
+              // ignore — best effort backfill
+            }
+          }
+        });
       } catch (e) {
         console.error('Failed to load jobs:', e);
       }
@@ -908,47 +1555,50 @@ function App() {
 
   const handleUploadComplete = (jobId, originalName) => {
     setCurrentJobId(jobId);
+    setCurrentFileName(originalName);
     const newJob = {
       jobId,
       originalName,
       userId: user?.id,
       status: 'queued',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      startedAt: Date.now()
     };
     setJobs(prev => [newJob, ...prev.slice(0, 19)]);
     setView('processing');
   };
 
-  const handleStatusUpdate = (statusData) => {
+  const handleStatusUpdate = useCallback((statusData) => {
     setJobs(prev => prev.map(job => 
       job.jobId === statusData.jobId ? { ...job, ...statusData } : job
     ));
-  };
+  }, []);
 
-  const handleTranscriptReady = async (statusData) => {
+  const handleTranscriptReady = useCallback(async (statusData) => {
+    const jobId = statusData.jobId;
     try {
-      const response = await fetch(`${API_BASE}/transcript/${statusData.jobId || currentJobId}`);
+      const response = await fetch(`${API_BASE}/transcript/${jobId}`);
       const data = await response.json();
       setTranscript(data);
-      setAudioUrl(`${API_BASE}/audio/${statusData.jobId || currentJobId}`);
+      setAudioUrl(`${API_BASE}/audio/${jobId}`);
       
-      setJobs(prev => prev.map(job => 
-        job.jobId === (statusData.jobId || currentJobId)
-          ? { 
-              ...job, 
-              status: 'completed', 
-              audioDuration: data.duration || statusData.audioDuration,
-              processingTime: data.processing_time || statusData.processingTime
-            }
-          : job
-      ));
+      setJobs(prev => prev.map(job => {
+        if (job.jobId !== jobId) return job;
+        const elapsed = job.startedAt ? Math.round((Date.now() - job.startedAt) / 1000) : null;
+        return {
+          ...job,
+          status: 'completed',
+          audioDuration: data.duration || statusData.audioDuration || job.audioDuration || null,
+          processingTime: data.processing_time || statusData.processingTime || elapsed || job.processingTime || null
+        };
+      }));
       
       setView('editor');
     } catch (error) {
       console.error('Failed to load transcript:', error);
       setView('upload');
     }
-  };
+  }, []);
 
   const handleSelectJob = async (job) => {
     setCurrentJobId(job.jobId);
@@ -957,11 +1607,36 @@ function App() {
       const data = await response.json();
       setTranscript(data);
       setAudioUrl(`${API_BASE}/audio/${job.jobId}`);
+
+      // Backfill duration & processing time from transcript data if missing
+      if (data.duration || data.processing_time) {
+        setJobs(prev => prev.map(j =>
+          j.jobId === job.jobId
+            ? {
+                ...j,
+                audioDuration: j.audioDuration || data.duration || null,
+                processingTime: j.processingTime || data.processing_time || null,
+              }
+            : j
+        ));
+      }
+
       setView('editor');
     } catch (error) {
       console.error('Failed to load transcript:', error);
       alert('Failed to load transcript');
     }
+  };
+
+  const handleDeleteJob = (jobId) => {
+    if (!window.confirm('Delete this job from your history?')) return;
+    setJobs(prev => {
+      const updated = prev.filter(j => j.jobId !== jobId);
+      if (updated.length === 0) {
+        localStorage.removeItem(storageKey);
+      }
+      return updated;
+    });
   };
 
   const handleSaveTranscript = async (paragraphs) => {
@@ -1026,6 +1701,7 @@ function App() {
               <JobsHistory 
                 jobs={jobs} 
                 onSelectJob={handleSelectJob}
+                onDeleteJob={handleDeleteJob}
                 currentJobId={currentJobId}
               />
             </>
@@ -1034,6 +1710,7 @@ function App() {
           {view === 'processing' && (
             <StatusPanel
               jobId={currentJobId}
+              fileName={currentFileName}
               onTranscriptReady={handleTranscriptReady}
               onStatusUpdate={handleStatusUpdate}
             />
@@ -1045,6 +1722,13 @@ function App() {
                 transcript={transcript}
                 audioUrl={audioUrl}
                 onSave={handleSaveTranscript}
+                onAudioDurationLoaded={(dur) => {
+                  setJobs(prev => prev.map(j =>
+                    j.jobId === currentJobId && !j.audioDuration
+                      ? { ...j, audioDuration: Math.round(dur) }
+                      : j
+                  ));
+                }}
               />
               <aside className="editor-sidebar">
                 <ExportOptions transcript={transcript} jobId={currentJobId} onBackToDashboard={resetToUpload} />
