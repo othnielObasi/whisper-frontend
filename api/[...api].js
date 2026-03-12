@@ -135,8 +135,8 @@ export default async function handler(req, res) {
             const downloadResponse = await blobClient.download();
             const content = await streamToString(downloadResponse.readableStreamBody);
             const data = JSON.parse(content);
-            processingTime = data.processing_time ?? null;
-            audioDuration = data.duration ?? null;
+            processingTime = data.processing_time ?? data.processingTime ?? data.process_time ?? null;
+            audioDuration = data.duration ?? data.audio_duration ?? data.audioDuration ?? null;
           } catch (e) {
             console.error('Failed reading transcript:', e);
           }

@@ -272,6 +272,8 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (loading) return;
+      // Don't capture keys when user is typing in an input
+      if (e.target.tagName === 'INPUT') return;
       if (e.code === 'Space') {
         e.preventDefault();
         if (isPlaying) stopPlayback();
@@ -431,6 +433,43 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  // Parse user-entered time string back to seconds
+  const parseTime = (str) => {
+    const cleaned = str.trim();
+    if (!cleaned) return null;
+    const parts = cleaned.split(':');
+    let seconds = 0;
+    if (parts.length === 3) {
+      seconds = (parseInt(parts[0], 10) || 0) * 3600 + (parseInt(parts[1], 10) || 0) * 60 + (parseFloat(parts[2]) || 0);
+    } else if (parts.length === 2) {
+      seconds = (parseInt(parts[0], 10) || 0) * 60 + (parseFloat(parts[1]) || 0);
+    } else {
+      seconds = parseFloat(parts[0]) || 0;
+    }
+    return isNaN(seconds) ? null : Math.max(0, seconds);
+  };
+
+  const [editingStart, setEditingStart] = useState(false);
+  const [editingEnd, setEditingEnd] = useState(false);
+  const [editStartVal, setEditStartVal] = useState('');
+  const [editEndVal, setEditEndVal] = useState('');
+
+  const commitStartTime = () => {
+    const t = parseTime(editStartVal);
+    if (t != null && t < trimEnd - 0.5 && t >= 0) {
+      setTrimStart(Math.min(t, duration));
+    }
+    setEditingStart(false);
+  };
+
+  const commitEndTime = () => {
+    const t = parseTime(editEndVal);
+    if (t != null && t > trimStart + 0.5 && t <= duration) {
+      setTrimEnd(t);
+    }
+    setEditingEnd(false);
+  };
+
   const trimmedDuration = trimEnd - trimStart;
   const savingsPercent = duration > 0 ? Math.round(((duration - trimmedDuration) / duration) * 100) : 0;
 
@@ -480,7 +519,23 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
                 <span className="trim-time-icon">◀</span>
                 <div>
                   <span className="trim-time-label">Start</span>
-                  <span className="trim-time-value">{formatTime(trimStart)}</span>
+                  {editingStart ? (
+                    <input
+                      className="trim-time-input"
+                      value={editStartVal}
+                      onChange={(e) => setEditStartVal(e.target.value)}
+                      onBlur={commitStartTime}
+                      onKeyDown={(e) => { if (e.key === 'Enter') commitStartTime(); if (e.key === 'Escape') setEditingStart(false); }}
+                      autoFocus
+                      placeholder="m:ss.s"
+                    />
+                  ) : (
+                    <span
+                      className="trim-time-value editable"
+                      onClick={() => { setEditStartVal(formatTime(trimStart)); setEditingStart(true); }}
+                      title="Click to type a time"
+                    >{formatTime(trimStart)}</span>
+                  )}
                 </div>
               </div>
               <div className="trim-time-card trim-time-selection">
@@ -496,7 +551,23 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
               <div className="trim-time-card trim-time-end">
                 <div>
                   <span className="trim-time-label">End</span>
-                  <span className="trim-time-value">{formatTime(trimEnd)}</span>
+                  {editingEnd ? (
+                    <input
+                      className="trim-time-input"
+                      value={editEndVal}
+                      onChange={(e) => setEditEndVal(e.target.value)}
+                      onBlur={commitEndTime}
+                      onKeyDown={(e) => { if (e.key === 'Enter') commitEndTime(); if (e.key === 'Escape') setEditingEnd(false); }}
+                      autoFocus
+                      placeholder="m:ss.s"
+                    />
+                  ) : (
+                    <span
+                      className="trim-time-value editable"
+                      onClick={() => { setEditEndVal(formatTime(trimEnd)); setEditingEnd(true); }}
+                      title="Click to type a time"
+                    >{formatTime(trimEnd)}</span>
+                  )}
                 </div>
                 <span className="trim-time-icon">▶</span>
               </div>
@@ -836,9 +907,11 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
 // ============================================
 function JobsHistory({ jobs, onSelectJob, onDeleteJob, currentJobId }) {
   const formatDuration = (seconds) => {
-    if (!seconds) return '-';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
+    if (seconds == null || seconds === false) return '-';
+    const num = Number(seconds);
+    if (isNaN(num) || num < 0) return '-';
+    const mins = Math.floor(num / 60);
+    const secs = Math.floor(num % 60);
     return `${mins}m ${secs}s`;
   };
 
@@ -1663,7 +1736,7 @@ function App() {
 
         // Backfill missing audioDuration/processingTime for completed jobs
         parsed.forEach(async (job) => {
-          if (job.status === 'completed' && (!job.audioDuration || !job.processingTime)) {
+          if (job.status === 'completed' && (job.audioDuration == null || job.processingTime == null)) {
             try {
               const res = await fetch(`${API_BASE}/status/${job.jobId}`);
               const data = await res.json();
@@ -1673,8 +1746,8 @@ function App() {
                     ? {
                         ...j,
                         status: 'completed',
-                        audioDuration: j.audioDuration || data.audioDuration || null,
-                        processingTime: j.processingTime || data.processingTime || null,
+                        audioDuration: j.audioDuration ?? data.audioDuration ?? null,
+                        processingTime: j.processingTime ?? data.processingTime ?? null,
                       }
                     : j
                 ));
@@ -1713,9 +1786,15 @@ function App() {
   };
 
   const handleStatusUpdate = useCallback((statusData) => {
-    setJobs(prev => prev.map(job => 
-      job.jobId === statusData.jobId ? { ...job, ...statusData } : job
-    ));
+    setJobs(prev => prev.map(job => {
+      if (job.jobId !== statusData.jobId) return job;
+      return {
+        ...job,
+        status: statusData.status ?? job.status,
+        audioDuration: statusData.audioDuration ?? job.audioDuration,
+        processingTime: statusData.processingTime ?? job.processingTime,
+      };
+    }));
   }, []);
 
   const handleTranscriptReady = useCallback(async (statusData) => {
@@ -1732,8 +1811,8 @@ function App() {
         return {
           ...job,
           status: 'completed',
-          audioDuration: data.duration || statusData.audioDuration || job.audioDuration || null,
-          processingTime: data.processing_time || statusData.processingTime || elapsed || job.processingTime || null
+          audioDuration: data.duration ?? data.audio_duration ?? statusData.audioDuration ?? job.audioDuration ?? null,
+          processingTime: data.processing_time ?? data.processingTime ?? statusData.processingTime ?? elapsed ?? job.processingTime ?? null
         };
       }));
       
@@ -1753,13 +1832,13 @@ function App() {
       setAudioUrl(`${API_BASE}/audio/${job.jobId}`);
 
       // Backfill duration & processing time from transcript data if missing
-      if (data.duration || data.processing_time) {
+      if (data.duration != null || data.audio_duration != null || data.processing_time != null) {
         setJobs(prev => prev.map(j =>
           j.jobId === job.jobId
             ? {
                 ...j,
-                audioDuration: j.audioDuration || data.duration || null,
-                processingTime: j.processingTime || data.processing_time || null,
+                audioDuration: j.audioDuration ?? data.duration ?? data.audio_duration ?? null,
+                processingTime: j.processingTime ?? data.processing_time ?? data.processingTime ?? null,
               }
             : j
         ));
