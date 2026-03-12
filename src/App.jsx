@@ -81,6 +81,7 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
   const [playMode, setPlayMode] = useState('selection');
   const playStartRef = useRef(0);
   const playOffsetRef = useRef(0);
+  const justDraggedRef = useRef(false);
 
   // Decode audio file
   useEffect(() => {
@@ -353,11 +354,11 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
     if (!dragging) return;
     const time = getTimeFromX(e.clientX);
     if (dragging === 'start') {
-      const t = Math.max(0, Math.min(time, trimEnd - 1));
+      const t = Math.max(0, Math.min(time, trimEnd - 0.5));
       setTrimStart(t);
       scrubAudio(t);
     } else if (dragging === 'end') {
-      const t = Math.min(duration, Math.max(time, trimStart + 1));
+      const t = Math.min(duration, Math.max(time, trimStart + 0.5));
       setTrimEnd(t);
       scrubAudio(t);
     } else if (dragging === 'region' && dragOrigin) {
@@ -375,9 +376,10 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
   }, [dragging, trimStart, trimEnd, duration, getTimeFromX, dragOrigin, scrubAudio]);
 
   const handlePointerUp = useCallback(() => {
+    if (dragging) justDraggedRef.current = true;
     setDragging(null);
     setDragOrigin(null);
-  }, []);
+  }, [dragging]);
 
   useEffect(() => {
     if (dragging) {
@@ -392,6 +394,7 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
 
   const handleWaveformClick = useCallback((e) => {
     if (dragging) return;
+    if (justDraggedRef.current) { justDraggedRef.current = false; return; }
     const time = getTimeFromX(e.clientX);
     setPlaybackTime(time);
     if (isPlaying) {
@@ -502,7 +505,9 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
             {/* Waveform */}
             <div className="trim-waveform-wrap">
               <div className="trim-waveform-container" ref={containerRef} onClick={handleWaveformClick}>
-                <canvas ref={canvasRef} className="trim-waveform-canvas" />
+                <div className="trim-canvas-wrap">
+                  <canvas ref={canvasRef} className="trim-waveform-canvas" />
+                </div>
 
                 {/* Handles */}
                 <div

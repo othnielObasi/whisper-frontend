@@ -1505,13 +1505,19 @@ button:disabled {
 .trim-waveform-container {
   position: relative;
   height: 160px;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid #E5DFD6;
   cursor: crosshair;
   user-select: none;
   touch-action: none;
+}
+
+.trim-canvas-wrap {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #E5DFD6;
   background: #F8F5F0;
+  pointer-events: none;
 }
 
 .trim-waveform-canvas {
