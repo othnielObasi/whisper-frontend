@@ -262,29 +262,49 @@ A single-page React application hosted on Vercel, providing the complete user ex
 | Authentication | Clerk | User sign-in/sign-up with per-user job history stored in localStorage |
 | API Proxy | Vercel Serverless (Node.js) | Catch-all route (`api/[...api].js`) proxying to Azure Storage |
 | Upload | Azure Blob SAS tokens | Frontend uploads directly to Azure via time-limited SAS URL (no file passes through server) |
-| Audio Playback | HTML5 Audio API | Synchronized playback highlighting the active transcript segment |
-| Audio Trimming | Web Audio API + Canvas | Visual waveform editor with drag handles to trim audio before upload |
+| Audio Playback | HTML5 `<audio>` element | Synchronized playback highlighting the active transcript segment, with imperative ref-based API (`seekAndPlay`, `pause`) |
+| Audio Trimming | Web Audio API + Canvas | Visual waveform editor with drag handles, click-to-seek, scrub preview, and keyboard shortcuts |
 | Export | Client-side generation | TXT (plain/timestamped), Word (.doc via HTML), SRT subtitles |
+| State Management | React Hooks + localStorage | Per-user job history stored in `whisper-jobs-{userId}` — no external state library |
+
+**React Components:**
+
+| Component | Purpose |
+|-----------|--------|
+| `App` | Root component — manages views (upload / processing / editor), job state, and navigation |
+| `LoginPage` | Unauthenticated landing page with Clerk sign-in/sign-up |
+| `UploadPanel` | Drag & drop file upload with interpreter mode toggle and optional trim |
+| `TrimModal` | Full waveform audio editor — drag handles, click-to-seek, scrub preview, keyboard shortcuts |
+| `StatusPanel` | Animated processing tracker with SVG progress ring and 4-step visual pipeline |
+| `StatusTips` | Rotating tips displayed during processing (cycles every 4 seconds) |
+| `AudioPlayer` | Audio playback controls with timeline scrubber, skip ±10s, and imperative ref API |
+| `TranscriptEditor` | Paragraph-based transcript viewer with playback sync and inline editing |
+| `TranscriptSegment` | Individual segment renderer — click to play, double-click to edit |
+| `ExportOptions` | Export to TXT, Word, and SRT with or without timestamps |
+| `JobsHistory` | Table of past transcriptions with status badges, durations, and actions |
 
 **Key features:**
 - **Drag & drop upload** with progress bar — supports MP3, WAV, M4A, FLAC
 - **Interpreter mode** — option to handle bilingual sermons (English-only or both languages)
-- **Real-time processing status** — animated step tracker with elapsed time and progress ring
+- **Real-time processing status** — animated SVG progress ring, 4-step tracker with elapsed time, and rotating tips
 - **Click-to-play** — single-click any transcript segment to play audio from that timestamp
 - **Inline editing** — double-click any segment to edit text, then save changes back to Azure
+- **Auto-scroll** — active segment automatically scrolls into centre view during playback
 - **Timestamp toggle** — show/hide timestamps for clean reading view
-- **Job history** — per-user history of past transcriptions with audio duration and processing time
+- **Audio trimming** — visual waveform with draggable handles, editable start/end timestamps (supports h:m:s.ms input), scrub preview while dragging, keyboard shortcuts (Space to play/pause, Esc to cancel), and savings percentage display
+- **Job history** — per-user history with auto-backfill of missing audio duration and processing time from the API
 - **Export options** — TXT, Word, SRT — each with or without timestamps
+- **Loading state** — spinner displayed while Clerk authentication initialises
 
 **API Endpoints (Vercel Serverless):**
 
 | Endpoint | Method | Purpose |
 |----------|--------|--------|
-| `/api/get-upload-url` | POST | Generates SAS token for direct browser-to-Azure upload |
-| `/api/upload-complete` | POST | Acknowledges upload (Event Grid handles the real trigger) |
-| `/api/status/:jobId` | GET | Polls Azure Storage to check if transcript exists |
-| `/api/transcript/:jobId` | GET | Fetches the `.paragraphs.json` from Azure |
-| `/api/transcript/:jobId` | PUT | Saves edited transcript back to Azure |
+| `/api/get-upload-url` | POST | Generates SAS token for direct browser-to-Azure upload — receives `{filename, contentType, interpreterMode, englishOnly}`, returns `{uploadUrl, jobId, blobName}` |
+| `/api/upload-complete` | POST | Acknowledges upload — sends `{jobId, blobName, interpreterMode, englishOnly, originalName}` (Event Grid handles the real trigger) |
+| `/api/status/:jobId` | GET | Polls Azure Storage to check if transcript exists — returns `{jobId, status, audioDuration?, processingTime?}` (polled every 5 seconds) |
+| `/api/transcript/:jobId` | GET | Fetches the `.paragraphs.json` — returns `{paragraphs: [{segments: [{ts, text, start, end}], end_ts}], duration?, processing_time?}` |
+| `/api/transcript/:jobId` | PUT | Saves edited transcript back to Azure — sends updated `{paragraphs}` with modified segment text |
 | `/api/audio/:jobId` | GET | Redirects to SAS-signed audio URL for browser playback |
 | `/api/_version` | GET | Health/version check |
 
