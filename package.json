@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "cp implementation-report.md public/implementation-report.md",
+    "predev": "cp implementation-report.md public/implementation-report.md",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
