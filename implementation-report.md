@@ -34,7 +34,7 @@ Before this project, the Transcription Team explored existing AI transcription s
 
 **However, a critical concern was raised: privacy.**
 
-Brother Blewett raised the issue of file privacy with third-party cloud services. Sermon recordings are the ministry's intellectual property, and uploading them to external AI platforms means:
+Issue of file privacy with third-party cloud services. Sermon recordings are the ministry's intellectual property, and uploading them to external AI platforms means:
 
 - Audio files are sent to servers outside the organisation's control
 - No guarantee the content isn't used for model training
@@ -438,8 +438,7 @@ The most impactful work is improving the transcript to the point where **correct
 
 The project spans **two repositories**:
 
-**Backend** — [`othnielObasi/whisperx-azure`](https://github.com/othnielObasi/whisperx-azure)
-
+**Backend** —
 ```
 ├── infra/                    # Azure resource definitions (Bicep IaC)
 ├── functions/enqueue_job/    # Azure Function (detects uploads, wakes VM)
@@ -461,7 +460,7 @@ The project spans **two repositories**:
 └── tests/                    # Sample outputs for quality comparison
 ```
 
-**Frontend** — [`othnielObasi/whisper-frontend`](https://github.com/othnielObasi/whisper-frontend)
+**Frontend** — 
 
 ```
 ├── src/
@@ -656,4 +655,4 @@ NEW → Azure Budget Alerts:                         ← COST SAFETY NET
 
 5. **Activity logs are essential for post-incident investigation.** Azure Activity Log recorded every start and deallocate event with the caller identity, making it possible to reconstruct exactly what happened. These logs are retained for 90 days by default.
 
-*Full forensic details, including the complete Activity Log timeline and code-level analysis of each failure mode, are documented in [COST_INCIDENT_REPORT.md](COST_INCIDENT_REPORT.md).*
+
