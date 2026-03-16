@@ -653,6 +653,4 @@ NEW → Azure Budget Alerts:                         ← COST SAFETY NET
 
 4. **Budget alerts are not optional for pay-per-use GPU resources.** The VM ran for 60 hours before anyone noticed. Even basic email alerts at threshold levels would have caught this within hours.
 
-5. **Activity logs are essential for post-incident investigation.** Azure Activity Log recorded every start and deallocate event with the caller identity, making it possible to reconstruct exactly what happened. These logs are retained for 90 days by default.
-
-
+5. **Activity logs are essential for post-incident investigation.** Azure Activity Log recorded every start and deallocate event with the caller identity, making it possible to reconstruct exactly what happened. These logs are retained for 90 days by defau

@@ -1857,9 +1857,52 @@ button:disabled {
   transform: translateY(-1px);
 }
 
+.trim-upload-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .trim-upload-btn svg {
   width: 18px;
   height: 18px;
+}
+
+.trim-skip-btn {
+  padding: 10px 20px;
+  background: transparent;
+  color: #8B5A2B;
+  border: 1px solid #D4C9BB;
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.trim-skip-btn:hover {
+  background: rgba(139, 90, 43, 0.06);
+  border-color: #8B5A2B;
+}
+
+.trim-skip-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.trim-export-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: trim-spin 0.6s linear infinite;
+}
+
+@keyframes trim-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Responsive */
