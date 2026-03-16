@@ -314,6 +314,9 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
   }, []);
 
   const scrubAudio = useCallback((time) => {
+    // Seek only — no playback during drag to keep memory safe
+    const audio = audioElRef.current;
+    if (audio) audio.currentTime = time;
     setPlaybackTime(time);
   }, []);
 
@@ -371,10 +374,22 @@ function TrimModal({ file, onTrimComplete, onCancel }) {
   }, [dragging, trimStart, trimEnd, duration, getTimeFromX, dragOrigin, scrubAudio]);
 
   const handlePointerUp = useCallback(() => {
-    if (dragging) justDraggedRef.current = true;
+    if (dragging) {
+      justDraggedRef.current = true;
+      // Play a brief audio snippet at the final handle position
+      const audio = audioElRef.current;
+      if (audio) {
+        const t = dragging === 'start' ? trimStart : dragging === 'end' ? trimEnd : trimStart;
+        audio.currentTime = t;
+        playEndRef.current = t + 0.2;
+        audio.play().then(() => {
+          setTimeout(() => { if (audioElRef.current) audioElRef.current.pause(); }, 200);
+        }).catch(() => {});
+      }
+    }
     setDragging(null);
     setDragOrigin(null);
-  }, [dragging]);
+  }, [dragging, trimStart, trimEnd]);
 
   useEffect(() => {
     if (dragging) {
