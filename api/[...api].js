@@ -216,7 +216,7 @@ export default async function handler(req, res) {
       const containerClient = blobServiceClient.getContainerClient(containerName);
 
       let audioBlob = null;
-      const extensions = ['.mp3', '.wav', '.m4a', '.flac'];
+      const extensions = ['.mp3', '.wav', '.m4a', '.flac', '.mp4', '.mov', '.mkv', '.avi', '.webm'];
       for await (const blob of containerClient.listBlobsFlat({ prefix: jobId })) {
         if (extensions.some(ext => blob.name.endsWith(ext))) {
           audioBlob = blob.name;
