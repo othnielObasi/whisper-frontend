@@ -1848,13 +1848,70 @@ function AnalyticsPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [pwInput, setPwInput] = useState('');
+  const [pwError, setPwError] = useState(false);
+
+  const fetchData = useCallback(async (pw, fromUser = false) => {
+    setLoading(true);
+    setError(null);
+    setPwError(false);
+    try {
+      const headers = pw ? { 'X-Analytics-Password': pw } : {};
+      const r = await fetch(`${API_BASE}/analytics`, { headers });
+      if (r.status === 401) {
+        sessionStorage.removeItem('analytics-pw');
+        setNeedsPassword(true);
+        setPwError(fromUser);
+        setLoading(false);
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      sessionStorage.setItem('analytics-pw', pw || '');
+      setData(d);
+      setNeedsPassword(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/analytics`)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(d => { setData(d); setLoading(false); })
-      .catch(e => { setError(e.message); setLoading(false); });
-  }, []);
+    fetchData(sessionStorage.getItem('analytics-pw') ?? '', false);
+  }, [fetchData]);
+
+  if (needsPassword) {
+    return (
+      <div className="analytics-gate">
+        <div className="analytics-gate-card">
+          <svg className="analytics-gate-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,7C13.4,7 14.8,8.1 14.8,9.5V11C15.4,11 16,11.6 16,12.3V15.8C16,16.4 15.4,17 14.7,17H9.2C8.6,17 8,16.4 8,15.7V12.2C8,11.6 8.6,11 9.2,11V9.5C9.2,8.1 10.6,7 12,7M12,8.2C11.2,8.2 10.5,8.7 10.5,9.5V11H13.5V9.5C13.5,8.7 12.8,8.2 12,8.2Z"/>
+          </svg>
+          <h3>Analytics</h3>
+          <p>Enter the password to view transcription analytics.</p>
+          {pwError && <p className="analytics-gate-error">Incorrect password — try again.</p>}
+          <input
+            type="password"
+            className="analytics-gate-input"
+            placeholder="Password"
+            value={pwInput}
+            autoFocus
+            onChange={e => setPwInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && pwInput && fetchData(pwInput, true)}
+          />
+          <button
+            className="btn-primary"
+            onClick={() => fetchData(pwInput, true)}
+            disabled={!pwInput || loading}
+          >
+            {loading ? 'Checking…' : 'Unlock'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -2022,11 +2079,30 @@ function App() {
   const [audioUrl, setAudioUrl] = useState(null);
   const [currentFileName, setCurrentFileName] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
-  const [view, setView] = useState('upload');
+  const [view, setView] = useState(() =>
+    window.location.pathname === '/analytics' ? 'analytics' : 'upload'
+  );
   const [jobs, setJobs] = useState([]);
 
   // User-specific storage key
   const storageKey = user ? `whisper-jobs-${user.id}` : 'whisper-jobs';
+
+  // Sync URL bar with view changes
+  useEffect(() => {
+    const target = view === 'analytics' ? '/analytics' : '/';
+    if (window.location.pathname !== target) {
+      history.pushState(null, '', target);
+    }
+  }, [view]);
+
+  // Handle browser back/forward
+  useEffect(() => {
+    const onPop = () => {
+      setView(window.location.pathname === '/analytics' ? 'analytics' : 'upload');
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   useEffect(() => {
     if (!user) return;

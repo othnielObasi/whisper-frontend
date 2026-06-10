@@ -234,6 +234,14 @@ export default async function handler(req, res) {
 
     // ----- analytics (GET) ----
     if (parts.length === 1 && parts[0] === 'analytics' && req.method === 'GET') {
+      const expectedPw = process.env.ANALYTICS_PASSWORD;
+      if (expectedPw) {
+        const provided = req.headers['x-analytics-password'] || '';
+        if (provided !== expectedPw) {
+          return res.status(401).json({ error: 'Password required' });
+        }
+      }
+
       const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
       const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
       const transcriptsContainer = blobServiceClient.getContainerClient('transcripts');
