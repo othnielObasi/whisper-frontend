@@ -1759,6 +1759,217 @@ function ExportOptions({ transcript, jobId, onBackToDashboard }) {
 }
 
 // ============================================
+// Analytics Page Component
+// ============================================
+const VIDEO_EXT_SET = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v']);
+
+function BarChartSVG({ data }) {
+  const maxVal = Math.max(...data.map(d => d.count), 1);
+  const W = 420, H = 160, PAD_L = 28, PAD_B = 28, PAD_T = 16, PAD_R = 8;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_B - PAD_T;
+  const barW = Math.max(4, chartW / data.length - 6);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ overflow: 'visible' }}>
+      {/* Y-axis line */}
+      <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + chartH} stroke="#E5DFD6" strokeWidth="1" />
+      {/* Baseline */}
+      <line x1={PAD_L} y1={PAD_T + chartH} x2={W - PAD_R} y2={PAD_T + chartH} stroke="#E5DFD6" strokeWidth="1" />
+      {data.map((d, i) => {
+        const slotW = chartW / data.length;
+        const barH = maxVal > 0 ? (d.count / maxVal) * chartH : 0;
+        const x = PAD_L + i * slotW + (slotW - barW) / 2;
+        const y = PAD_T + chartH - barH;
+        return (
+          <g key={d.month}>
+            {d.count > 0 && (
+              <rect x={x} y={y} width={barW} height={barH} fill="#8B5A2B" rx="3" />
+            )}
+            {d.count === 0 && (
+              <rect x={x} y={PAD_T + chartH - 2} width={barW} height={2} fill="#D4C4B0" rx="1" />
+            )}
+            {d.count > 0 && (
+              <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize="10" fill="#8B5A2B" fontWeight="600">
+                {d.count}
+              </text>
+            )}
+            <text x={x + barW / 2} y={H - 4} textAnchor="middle" fontSize="10" fill="#9C8B78">
+              {d.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function DonutChartSVG({ audio, video }) {
+  const total = audio + video;
+  if (total === 0) {
+    return (
+      <svg viewBox="0 0 160 160" width="160" height="160">
+        <circle cx="80" cy="80" r="52" fill="none" stroke="#E5DFD6" strokeWidth="28" />
+        <text x="80" y="80" textAnchor="middle" dominantBaseline="middle" fontSize="22" fontWeight="700" fill="#9C8B78">0</text>
+        <text x="80" y="98" textAnchor="middle" fontSize="11" fill="#9C8B78">total</text>
+      </svg>
+    );
+  }
+  const cx = 80, cy = 80, r = 52, strokeW = 28;
+  const circ = 2 * Math.PI * r;
+  const audioDash = (audio / total) * circ;
+  const videoDash = (video / total) * circ;
+  return (
+    <svg viewBox="0 0 160 160" width="160" height="160">
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#8B5A2B" strokeWidth={strokeW}
+        strokeDasharray={`${audioDash} ${circ - audioDash}`}
+        strokeDashoffset={circ * 0.25}
+        style={{ transition: 'stroke-dasharray 0.6s ease' }} />
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#D4A574" strokeWidth={strokeW}
+        strokeDasharray={`${videoDash} ${circ - videoDash}`}
+        strokeDashoffset={circ * 0.25 - audioDash}
+        style={{ transition: 'stroke-dasharray 0.6s ease' }} />
+      <text x={cx} y={cy - 6} textAnchor="middle" dominantBaseline="middle" fontSize="22" fontWeight="700" fill="#2C2416">{total}</text>
+      <text x={cx} y={cy + 14} textAnchor="middle" fontSize="11" fill="#9C8B78">total</text>
+    </svg>
+  );
+}
+
+function StatCard({ label, value, sub }) {
+  return (
+    <div className="stat-card">
+      <div className="stat-value">{value}</div>
+      <div className="stat-label">{label}</div>
+      {sub && <div className="stat-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function AnalyticsPage() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/analytics`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => { setData(d); setLoading(false); })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="analytics-loading">
+        <div className="analytics-spinner" />
+        <p>Loading analytics…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="analytics-error">
+        <p>Failed to load analytics: {error}</p>
+      </div>
+    );
+  }
+
+  const audioCount = data.byFileType?.audio ?? 0;
+  const videoCount = data.byFileType?.video ?? 0;
+
+  return (
+    <div className="analytics-page">
+      <div className="analytics-header">
+        <h2 className="analytics-title">Analytics</h2>
+        <p className="analytics-sub">All-time transcription metrics for Godstone Tabernacle</p>
+      </div>
+
+      <div className="analytics-cards">
+        <StatCard label="Transcriptions completed" value={data.totalCompleted.toLocaleString()} />
+        <StatCard label="Audio hours processed" value={`${data.totalAudioHours}h`} />
+        <StatCard label="Words transcribed" value={data.totalWords.toLocaleString()} />
+        <StatCard
+          label="Human typing hours saved"
+          value={`~${data.humanHoursSaved}h`}
+          sub="vs. manual transcription"
+        />
+      </div>
+
+      <div className="analytics-charts-row">
+        <div className="analytics-chart-card analytics-chart-bar">
+          <h3 className="chart-title">Transcriptions — last 6 months</h3>
+          <BarChartSVG data={data.byMonth} />
+        </div>
+
+        <div className="analytics-chart-card analytics-chart-donut">
+          <h3 className="chart-title">File type breakdown</h3>
+          <div className="donut-wrap">
+            <DonutChartSVG audio={audioCount} video={videoCount} />
+            <div className="donut-legend">
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: '#8B5A2B' }} />
+                <span>Audio ({audioCount})</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: '#D4A574' }} />
+                <span>Video ({videoCount})</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {data.recent?.length > 0 && (
+        <div className="analytics-recent">
+          <h3 className="chart-title">Recent transcriptions</h3>
+          <div className="jobs-table-wrapper">
+            <table className="jobs-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Type</th>
+                  <th>Duration</th>
+                  <th>Processing</th>
+                  <th>Words</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.recent.map((job, i) => {
+                  const fname = job.sourceName
+                    ? job.sourceName.replace(/^\d{8}_\d{6}_[a-z0-9]+\./, '')
+                    : job.jobId;
+                  return (
+                    <tr key={i}>
+                      <td title={job.sourceName}>{fname || job.jobId}</td>
+                      <td>
+                        <span className={`status-badge ${job.fileType === 'video' ? 'status-processing' : 'status-completed'}`}>
+                          {job.fileType}
+                        </span>
+                      </td>
+                      <td>{job.audioDurationMin != null ? `${Math.round(job.audioDurationMin)} min` : '—'}</td>
+                      <td>{job.processingTimeMin != null ? `${Math.round(job.processingTimeMin)} min` : '—'}</td>
+                      <td>{job.wordCount != null ? job.wordCount.toLocaleString() : '—'}</td>
+                      <td>
+                        {job.createdAt
+                          ? new Date(job.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                          : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {data.sampledFrom < data.totalCompleted && (
+            <p className="analytics-note">Showing metrics based on the {data.sampledFrom} most recent transcriptions of {data.totalCompleted} total.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // Login Page Component
 // ============================================
 function LoginPage() {
@@ -1995,6 +2206,11 @@ function App() {
             <span>Sermon Transcriber</span>
           </div>
           <div className="header-right">
+            {view !== 'analytics' && (
+              <button className="btn-nav" onClick={() => setView('analytics')}>
+                Analytics
+              </button>
+            )}
             {view !== 'upload' && (
               <button className="btn-secondary" onClick={resetToUpload}>
                 New Upload
@@ -2029,6 +2245,8 @@ function App() {
               onStatusUpdate={handleStatusUpdate}
             />
           )}
+
+          {view === 'analytics' && <AnalyticsPage />}
 
           {view === 'editor' && transcript && (
             <div className="editor-layout">

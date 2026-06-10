@@ -232,6 +232,116 @@ export default async function handler(req, res) {
       return res.redirect(302, sasUrl);
     }
 
+    // ----- analytics (GET) ----
+    if (parts.length === 1 && parts[0] === 'analytics' && req.method === 'GET') {
+      const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
+      const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+      const transcriptsContainer = blobServiceClient.getContainerClient('transcripts');
+
+      // List all paragraphs blobs
+      const allBlobs = [];
+      for await (const blob of transcriptsContainer.listBlobsFlat()) {
+        if (blob.name.endsWith('.paragraphs.json')) {
+          allBlobs.push({ name: blob.name, createdOn: blob.properties?.createdOn });
+        }
+      }
+
+      // Most recent first
+      allBlobs.sort((a, b) => {
+        const ta = a.createdOn ? new Date(a.createdOn).getTime() : 0;
+        const tb = b.createdOn ? new Date(b.createdOn).getTime() : 0;
+        return tb - ta;
+      });
+
+      const totalCompleted = allBlobs.length;
+
+      // Read up to 100 most recent for detailed metrics
+      const sample = allBlobs.slice(0, 100);
+      const BATCH = 20;
+      const docs = [];
+      for (let i = 0; i < sample.length; i += BATCH) {
+        const batch = sample.slice(i, i + BATCH);
+        const results = await Promise.all(batch.map(async ({ name }) => {
+          try {
+            const dl = await transcriptsContainer.getBlobClient(name).download();
+            const text = await streamToString(dl.readableStreamBody);
+            return JSON.parse(text);
+          } catch {
+            return null;
+          }
+        }));
+        docs.push(...results.filter(Boolean));
+      }
+
+      const VIDEO_EXTS = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v']);
+      let totalAudioMin = 0, totalWords = 0, totalProcMin = 0, procCount = 0;
+      const byFileType = {};
+      const byMonthSample = {};
+
+      for (const doc of docs) {
+        const audioMin = doc.audio_duration_min ?? doc.audioDuration ?? 0;
+        const procMin = doc.processing_time_min ?? doc.processingTime ?? 0;
+        const words = doc.word_count ?? doc.wordCount ?? 0;
+        const sourceName = doc.source?.blob_name ?? doc._metadata?.source_file ?? '';
+        const createdAt = doc.created_at ?? doc.createdAt ?? '';
+
+        totalAudioMin += audioMin;
+        totalWords += words;
+        if (procMin > 0) { totalProcMin += procMin; procCount++; }
+
+        const ext = sourceName.split('.').pop()?.toLowerCase() ?? 'unknown';
+        const typeKey = VIDEO_EXTS.has(ext) ? 'video' : 'audio';
+        byFileType[typeKey] = (byFileType[typeKey] ?? 0) + 1;
+
+        const month = (createdAt || '').slice(0, 7);
+        if (month) byMonthSample[month] = (byMonthSample[month] ?? 0) + 1;
+      }
+
+      // Scale totals proportionally if we sampled fewer than total
+      const scaleFactor = sample.length > 0 ? totalCompleted / sample.length : 1;
+      const scaledAudioHours = Math.round((totalAudioMin * scaleFactor) / 60 * 10) / 10;
+      const scaledWords = Math.round(totalWords * scaleFactor);
+      const humanHoursSaved = Math.round(scaledAudioHours * 4.5 * 10) / 10;
+
+      // Last 6 calendar months for bar chart
+      const now = new Date();
+      const byMonth = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const label = d.toLocaleString('en-GB', { month: 'short', year: '2-digit' });
+        byMonth.push({ month: key, label, count: byMonthSample[key] ?? 0 });
+      }
+
+      const recent = docs.slice(0, 20).map((doc, i) => {
+        const sourceName = doc.source?.blob_name ?? doc._metadata?.source_file ?? sample[i]?.name ?? '';
+        const ext = sourceName.split('.').pop()?.toLowerCase() ?? '';
+        return {
+          jobId: sample[i]?.name.replace('.paragraphs.json', '') ?? '',
+          sourceName,
+          fileType: VIDEO_EXTS.has(ext) ? 'video' : 'audio',
+          audioDurationMin: doc.audio_duration_min ?? doc.audioDuration ?? null,
+          processingTimeMin: doc.processing_time_min ?? doc.processingTime ?? null,
+          wordCount: doc.word_count ?? doc.wordCount ?? null,
+          createdAt: doc.created_at ?? doc.createdAt ?? null,
+        };
+      });
+
+      res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=60');
+      return res.status(200).json({
+        totalCompleted,
+        totalAudioHours: scaledAudioHours,
+        totalWords: scaledWords,
+        humanHoursSaved,
+        avgProcessingMin: procCount > 0 ? Math.round(totalProcMin / procCount * 10) / 10 : null,
+        byFileType,
+        byMonth,
+        recent,
+        sampledFrom: sample.length,
+        generatedAt: new Date().toISOString(),
+      });
+    }
+
     // Not found
     return res.status(404).json({ error: 'Not found' });
   } catch (e) {
