@@ -655,4 +655,101 @@ NEW → Azure Budget Alerts:                         ← COST SAFETY NET
 
 5. **Activity logs are essential for post-incident investigation.** Azure Activity Log recorded every start and deallocate event with the caller identity, making it possible to reconstruct exactly what happened. These logs are retained for 90 days by default.
 
+---
+
+## 12. Video File Support
+
+**Date**: June 2026
+
+### What Was Added
+
+The web portal now accepts video files (MP4, MOV, MKV, AVI, WebM) in addition to audio files. Audio is extracted from the video entirely in the browser before anything is uploaded to Azure — the video file never leaves the user's device.
+
+### Why This Approach
+
+The backend (GPU VM) already uses `ffmpeg -vn` to convert any input to 16 kHz WAV before transcription, so it would have handled video files natively. However, uploading a raw video file (often 500 MB–3 GB for a 2-hour sermon) wastes bandwidth and storage:
+
+| Approach | Video uploaded to Azure | Storage used | Upload time |
+|---|---|---|---|
+| Upload video → VM converts | Yes | ~1–3 GB per sermon | Slow |
+| **Browser converts → upload audio** | **No** | **~30–80 MB per sermon** | **Fast** |
+
+Browser-side conversion using `ffmpeg.wasm` extracts the audio track in seconds using stream copy (no re-encoding). Only the extracted audio reaches Azure.
+
+### How It Works
+
+```
+User drops video file (MP4, MOV, MKV, AVI, WebM)
+        ↓
+detectFileType() reads first 12 bytes (magic bytes — not file extension or MIME type)
+        ↓
+Video detected → ffmpeg.wasm loads (lazy, cached after first use)
+        ↓
+Fast path:  ffmpeg -i input.mp4 -vn -acodec copy output.m4a
+            (stream copy — strips video track, no re-encode, completes in seconds)
+        ↓
+Fallback:   ffmpeg -i input.mkv -vn -ar 44100 -ac 1 -b:a 96k output.mp3
+            (re-encode — used when stream copy fails, e.g. MKV with Opus audio)
+        ↓
+Extracted audio file (.m4a or .mp3) handed to the existing upload flow
+        ↓
+If "Trim audio" is enabled → TrimModal opens with the audio file
+        ↓
+Only audio uploaded to Azure. Video stays on device.
+```
+
+### File Type Detection
+
+File type is detected by reading the file's **magic bytes** (first 12 bytes), not by file extension or browser-reported MIME type. Extensions and MIME types can be wrong or missing depending on the OS and browser; magic bytes cannot.
+
+| Container | Magic bytes checked |
+|---|---|
+| MP4 / MOV / M4V | `ftyp` box at byte offset 4 (`0x66 0x74 0x79 0x70`) |
+| MKV / WebM | EBML header (`0x1A 0x45 0xDF 0xA3`) |
+| AVI | RIFF header + `AVI` identifier (`0x52 0x49 0x46 0x46` + `0x41 0x56 0x49`) |
+| Everything else | Treated as audio — existing flow unchanged |
+
+### Trim Support for Video
+
+When "Trim audio before upload" is checked and a video is dropped:
+
+1. Video is converted to audio (.m4a) first
+2. TrimModal opens with the extracted audio — the existing waveform editor works as normal
+3. Only the trimmed audio is uploaded
+
+This works because the extracted .m4a is a standard audio file that Web Audio API can decode. The TrimModal has no knowledge that the source was a video.
+
+### Any File Size
+
+Videos are converted using **stream copy** (`-acodec copy`), which does not re-encode — it reads the audio bitstream sequentially and rewraps it. Memory usage during this operation is proportional to the output audio size (typically 30–80 MB), not the input video size, making it practical for any video size on any modern device.
+
+If conversion fails (device out of memory, unsupported codec), the original file is uploaded directly to Azure and the VM's ffmpeg handles the conversion instead.
+
+### SharedArrayBuffer (COOP/COEP Headers)
+
+`ffmpeg.wasm` can use `SharedArrayBuffer` for multi-threaded processing when the page is cross-origin isolated. Two headers were added:
+
+| Header | Value | Purpose |
+|---|---|---|
+| `Cross-Origin-Opener-Policy` | `same-origin` | Isolates the browsing context |
+| `Cross-Origin-Embedder-Policy` | `credentialless` | Enables SharedArrayBuffer without blocking third-party resources |
+
+`credentialless` (rather than `require-corp`) is used so that Clerk and other third-party scripts continue to load without CORP headers.
+
+If the browser does not support cross-origin isolation, `ffmpeg.wasm` automatically falls back to single-threaded mode — the conversion still works, just slightly slower for large re-encodes. Stream copy is unaffected.
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `src/videoConverter.js` | New file — `detectFileType()` (magic bytes) and `convertVideoToAudio()` (ffmpeg.wasm) |
+| `src/App.jsx` | Import converter; add `converting`/`convertProgress` state; `handleFile()` async function replacing inline drop/select handlers; updated drop zone UI; `accept="audio/*,video/*"` on file input |
+| `vercel.json` | COOP/COEP headers for production (Vercel) |
+| `vite.config.js` | COOP/COEP headers for local dev server |
+| `package.json` | Added `@ffmpeg/ffmpeg` and `@ffmpeg/util` |
+
+### Backend Changes
+
+None. The GPU VM's ffmpeg conversion step (`-vn -ac 1 -ar 16000 -c:a pcm_s16le`) already handles any input container. The VM only ever receives an audio file now, which is unchanged from before.
+
 

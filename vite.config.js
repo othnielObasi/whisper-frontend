@@ -15,6 +15,10 @@ export default defineConfig({
     },
   },
   server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:7071',

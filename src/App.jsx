@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  SignedIn, 
-  SignedOut, 
-  SignInButton, 
+import {
+  SignedIn,
+  SignedOut,
+  SignInButton,
   SignUpButton,
   UserButton,
-  useUser 
+  useUser
 } from '@clerk/clerk-react';
+import { detectFileType, convertVideoToAudio } from './videoConverter';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -756,6 +757,8 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
   const [englishOnly, setEnglishOnly] = useState(true);
   const [trimEnabled, setTrimEnabled] = useState(false);
   const [trimFile, setTrimFile] = useState(null);
+  const [converting, setConverting] = useState(false);
+  const [convertProgress, setConvertProgress] = useState(0);
   const fileInputRef = useRef(null);
 
   const handleDrag = (e) => {
@@ -834,44 +837,73 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
     }
   };
 
+  const handleFile = async (f) => {
+    const type = await detectFileType(f);
+
+    if (type === 'video') {
+      setConverting(true);
+      setConvertProgress(0);
+      try {
+        const audioFile = await convertVideoToAudio(f, setConvertProgress);
+        setConverting(false);
+        if (trimEnabled) {
+          setTrimFile(audioFile);
+        } else {
+          uploadFile(audioFile);
+        }
+      } catch (err) {
+        console.error('Video conversion failed, uploading original:', err);
+        setConverting(false);
+        if (trimEnabled) {
+          setTrimFile(f);
+        } else {
+          uploadFile(f);
+        }
+      }
+    } else {
+      if (trimEnabled) {
+        setTrimFile(f);
+      } else {
+        uploadFile(f);
+      }
+    }
+  };
+
   const handleDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const f = e.dataTransfer.files[0];
-      if (trimEnabled) {
-        setTrimFile(f);
-      } else {
-        uploadFile(f);
-      }
+      handleFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileSelect = (e) => {
     if (e.target.files && e.target.files[0]) {
-      const f = e.target.files[0];
-      if (trimEnabled) {
-        setTrimFile(f);
-      } else {
-        uploadFile(f);
-      }
+      handleFile(e.target.files[0]);
     }
   };
 
   return (
     <div className="upload-panel">
-      <h2>Upload Audio</h2>
-      
+      <h2>Upload Audio or Video</h2>
+
       <div
-        className={`drop-zone ${dragActive ? 'active' : ''} ${isUploading ? 'uploading' : ''}`}
+        className={`drop-zone ${dragActive ? 'active' : ''} ${(isUploading || converting) ? 'uploading' : ''}`}
         onDragEnter={handleDrag}
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        onClick={() => !isUploading && fileInputRef.current?.click()}
+        onClick={() => !isUploading && !converting && fileInputRef.current?.click()}
       >
-        {isUploading ? (
+        {converting ? (
+          <div className="upload-progress">
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${convertProgress}%` }} />
+            </div>
+            <span>Extracting audio... {convertProgress}%</span>
+          </div>
+        ) : isUploading ? (
           <div className="upload-progress">
             <div className="progress-bar">
               <div className="progress-fill" style={{ width: `${progress}%` }} />
@@ -887,14 +919,14 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
             </div>
-            <p>Drag & drop audio file or click to browse</p>
-            <span className="file-types">MP3, WAV, M4A, FLAC supported</span>
+            <p>Drag & drop audio or video file or click to browse</p>
+            <span className="file-types">MP3, WAV, M4A, FLAC · MP4, MOV, MKV, AVI</span>
           </>
         )}
         <input
           ref={fileInputRef}
           type="file"
-          accept="audio/*"
+          accept="audio/*,video/*"
           onChange={handleFileSelect}
           hidden
         />
