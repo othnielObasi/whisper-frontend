@@ -53,10 +53,11 @@ export async function convertVideoToAudio(file, onProgress) {
   try {
     await instance.writeFile(inputName, await fetchFile(file));
 
-    // Fast path: stream copy — no re-encode, just strips video track (seconds, any size)
+    // Fast path: stream copy — strips video track, +faststart moves moov atom to front
+    // so browsers can read duration immediately when streaming from Azure
     let usedCopy = true;
     try {
-      await instance.exec(['-i', inputName, '-vn', '-acodec', 'copy', 'output.m4a']);
+      await instance.exec(['-i', inputName, '-vn', '-acodec', 'copy', '-movflags', '+faststart', 'output.m4a']);
     } catch {
       // Stream copy failed (e.g. MKV with Opus) — fall back to re-encode
       usedCopy = false;
