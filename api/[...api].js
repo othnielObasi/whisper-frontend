@@ -47,7 +47,7 @@ export default async function handler(req, res) {
       const accountKey = process.env.AZURE_STORAGE_KEY;
       const containerName = process.env.AZURE_STORAGE_CONTAINER || 'audio-input';
 
-      const { filename } = req.body || {};
+      const { filename, langMode } = req.body || {};
       if (!filename || typeof filename !== 'string') {
         return res.status(400).json({ error: 'filename is required' });
       }
@@ -65,7 +65,9 @@ export default async function handler(req, res) {
         return clean || 'mp3';
       })();
 
-      const blobName = `${jobId}.${ext}`;
+      // Encode language mode as a suffix so enqueue_job can parse it from the blob name
+      const langSuffix = langMode === 'en_only' ? '_en' : langMode === 'both' ? '_both' : '';
+      const blobName = `${jobId}${langSuffix}.${ext}`;
 
       if (!accountName || !accountKey) {
         return res.status(500).json({ error: 'Missing env: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY' });
@@ -124,6 +126,8 @@ export default async function handler(req, res) {
 
       const transcriptContainer = blobServiceClient.getContainerClient('transcripts');
       let completed = false;
+      let failed = false;
+      let failedError = null;
       let processingTime = null;
       let audioDuration = null;
 
@@ -142,10 +146,24 @@ export default async function handler(req, res) {
           }
           break;
         }
+        if (blob.name.endsWith('.failed.json')) {
+          failed = true;
+          try {
+            const blobClient = transcriptContainer.getBlobClient(blob.name);
+            const downloadResponse = await blobClient.download();
+            const content = await streamToString(downloadResponse.readableStreamBody);
+            const data = JSON.parse(content);
+            failedError = data.error ?? 'Transcription failed';
+          } catch (e) { /* ignore */ }
+          break;
+        }
       }
 
       if (completed) {
         return res.status(200).json({ jobId, status: 'completed', processingTime, audioDuration });
+      }
+      if (failed) {
+        return res.status(200).json({ jobId, status: 'failed', error: failedError });
       }
 
       const audioContainer = blobServiceClient.getContainerClient('audio-input');
@@ -190,19 +208,34 @@ export default async function handler(req, res) {
         return res.status(200).json({ status: 'saved' });
       }
 
-      // GET
-      let transcriptBlob = null;
+      // GET — collect all paragraphs blobs for this job (both mode produces multiple)
+      const transcriptBlobs = [];
       for await (const blob of containerClient.listBlobsFlat({ prefix: jobId })) {
         if (blob.name.endsWith('.paragraphs.json')) {
-          transcriptBlob = blob.name;
-          break;
+          transcriptBlobs.push(blob.name);
         }
       }
-      if (!transcriptBlob) return res.status(404).json({ error: 'Transcript not found' });
-      const blobClient = containerClient.getBlobClient(transcriptBlob);
-      const downloadResponse = await blobClient.download();
-      const content = await streamToString(downloadResponse.readableStreamBody);
-      return res.status(200).json(JSON.parse(content));
+      if (transcriptBlobs.length === 0) return res.status(404).json({ error: 'Transcript not found' });
+
+      if (transcriptBlobs.length === 1) {
+        // Standard / en_only — return single doc as before
+        const blobClient = containerClient.getBlobClient(transcriptBlobs[0]);
+        const downloadResponse = await blobClient.download();
+        const content = await streamToString(downloadResponse.readableStreamBody);
+        return res.status(200).json(JSON.parse(content));
+      }
+
+      // Both mode — return array of {lang, ...doc}
+      const docs = await Promise.all(transcriptBlobs.sort().map(async (name) => {
+        const dl = await containerClient.getBlobClient(name).download();
+        const text = await streamToString(dl.readableStreamBody);
+        const doc = JSON.parse(text);
+        // e.g. "20260626_120000_abc_both.en.paragraphs.json" → lang="en"
+        const langMatch = name.match(/\.([a-z]{2,3})\.paragraphs\.json$/);
+        doc._lang = langMatch ? langMatch[1] : name;
+        return doc;
+      }));
+      return res.status(200).json({ mode: 'both', streams: docs });
     }
 
     // ----- audio/:jobId (GET redirect to SAS) ----

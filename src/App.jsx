@@ -776,14 +776,14 @@ function UploadPanel({ onUploadComplete, isUploading, setIsUploading }) {
     setProgress(0);
 
     try {
+      const langMode = interpreterMode ? (englishOnly ? 'en_only' : 'both') : 'standard';
       const tokenRes = await fetch(`${API_BASE}/get-upload-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filename: file.name,
           contentType: file.type,
-          interpreterMode,
-          englishOnly
+          langMode,
         })
       });
       
@@ -1239,7 +1239,12 @@ function StatusPanel({ jobId, fileName, onTranscriptReady, onStatusUpdate }) {
       {isActive && <StatusTips />}
 
       {currentStatus === 'failed' && (
-        <p className="status-error-msg">Something went wrong. Please try uploading again.</p>
+        <div className="status-error-block">
+          <p className="status-error-msg">Transcription failed — please try uploading the file again.</p>
+          {statusDetails?.error && (
+            <p className="status-error-detail">{statusDetails.error}</p>
+          )}
+        </div>
       )}
 
       {pollErrors >= 3 && (
@@ -2079,6 +2084,7 @@ function App() {
   const [audioUrl, setAudioUrl] = useState(null);
   const [currentFileName, setCurrentFileName] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [langStreamIdx, setLangStreamIdx] = useState(0);
   const [view, setView] = useState(() =>
     window.location.pathname === '/analytics' ? 'analytics' : 'upload'
   );
@@ -2181,6 +2187,7 @@ function App() {
       const response = await fetch(`${API_BASE}/transcript/${jobId}`);
       const data = await response.json();
       setTranscript(data);
+      setLangStreamIdx(0);
       setAudioUrl(`${API_BASE}/audio/${jobId}`);
       
       setJobs(prev => prev.map(job => {
@@ -2203,6 +2210,7 @@ function App() {
 
   const handleSelectJob = async (job) => {
     setCurrentJobId(job.jobId);
+    setLangStreamIdx(0);
     try {
       const response = await fetch(`${API_BASE}/transcript/${job.jobId}`);
       const data = await response.json();
@@ -2324,25 +2332,42 @@ function App() {
 
           {view === 'analytics' && <AnalyticsPage />}
 
-          {view === 'editor' && transcript && (
-            <div className="editor-layout">
-              <TranscriptEditor
-                transcript={transcript}
-                audioUrl={audioUrl}
-                onSave={handleSaveTranscript}
-                onAudioDurationLoaded={(dur) => {
-                  setJobs(prev => prev.map(j =>
-                    j.jobId === currentJobId && !j.audioDuration
-                      ? { ...j, audioDuration: Math.round(dur) }
-                      : j
-                  ));
-                }}
-              />
-              <aside className="editor-sidebar">
-                <ExportOptions transcript={transcript} jobId={currentJobId} onBackToDashboard={resetToUpload} />
-              </aside>
-            </div>
-          )}
+          {view === 'editor' && transcript && (() => {
+            const isBoth = transcript.mode === 'both' && Array.isArray(transcript.streams);
+            const activeTranscript = isBoth ? transcript.streams[langStreamIdx] : transcript;
+            return (
+              <div className="editor-layout">
+                {isBoth && (
+                  <div className="lang-stream-tabs">
+                    {transcript.streams.map((stream, idx) => (
+                      <button
+                        key={idx}
+                        className={`lang-stream-tab${langStreamIdx === idx ? ' active' : ''}`}
+                        onClick={() => setLangStreamIdx(idx)}
+                      >
+                        {stream._lang ? stream._lang.toUpperCase() : `Stream ${idx + 1}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <TranscriptEditor
+                  transcript={activeTranscript}
+                  audioUrl={audioUrl}
+                  onSave={handleSaveTranscript}
+                  onAudioDurationLoaded={(dur) => {
+                    setJobs(prev => prev.map(j =>
+                      j.jobId === currentJobId && !j.audioDuration
+                        ? { ...j, audioDuration: Math.round(dur) }
+                        : j
+                    ));
+                  }}
+                />
+                <aside className="editor-sidebar">
+                  <ExportOptions transcript={activeTranscript} jobId={currentJobId} onBackToDashboard={resetToUpload} />
+                </aside>
+              </div>
+            );
+          })()}
         </main>
 
         <footer className="app-footer">

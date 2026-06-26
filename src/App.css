@@ -722,11 +722,28 @@ button:disabled {
 }
 
 /* --- Error state --- */
+.status-error-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
 .status-error-msg {
   color: #A94442;
   font-size: 0.9rem;
   text-align: center;
   margin: 0;
+}
+
+.status-error-detail {
+  color: #B07070;
+  font-size: 0.78rem;
+  text-align: center;
+  margin: 0;
+  font-family: monospace;
+  max-width: 380px;
+  word-break: break-word;
 }
 
 /* Keep old status-panel styles for backward compat (unused but harmless) */
@@ -2218,6 +2235,37 @@ button:disabled {
     flex-direction: row;
     justify-content: center;
   }
+}
+
+/* Language stream tabs (both mode) */
+.lang-stream-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px 0;
+}
+
+.lang-stream-tab {
+  padding: 6px 18px;
+  border: 1.5px solid #D4C5A9;
+  border-radius: 20px;
+  background: #FAF8F5;
+  color: #8B7355;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.lang-stream-tab.active {
+  background: #5C4033;
+  color: #fff;
+  border-color: #5C4033;
+}
+
+.lang-stream-tab:hover:not(.active) {
+  background: #EDE8E0;
+  border-color: #8B7355;
 }
 
 @media (max-width: 420px) {
